@@ -53,7 +53,7 @@ a{color:var(--brand)}
 .kpi span{font-size:13px;font-weight:700;color:var(--muted)}
 .kpi.on{outline:2px solid var(--brand)}
 .kpi.w b{color:var(--warn)} .kpi.g b{color:var(--ok)}
-.steps{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px}
 .step{display:flex;flex-direction:column;align-items:center;gap:6px}
 .step span{width:32px;height:32px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;background:var(--bg);color:#6B7280}
 .step small{font-size:12px;color:#6B7280}
@@ -108,7 +108,13 @@ const SUPABASE_URL = 'https://vgbrkddsuchmhzevfgkg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Os0roCD0xwSAdCOc2HcNuw_XmFDb4Je';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const STAGES = ['입고','분해','판금','도장','조립','세차','출고'];
+const STAGES = ['입고','수리 중','출고'];
+const LAST = STAGES.length - 1;
+const STATUS = ['입고 완료','수리 중','출고 완료'];
+const NEXT = ['입고 사진','중간 사진','출고 사진'];
+const BTN = ['사진 찍고 입고 완료','중간 사진 등록 (판금 후 도장 전)','완성차 사진 찍고 출고 완료'];
+const DONE_TITLE = ['입고 완료','중간 사진 등록 완료','출고 완료'];
+const DEFAULT_DAYS = 3; // 입고일 + 3일 = 기본 출고 예정일
 const DELAY_REASONS = ['부품 대기','보험사 승인 대기','추가 손상 발견','고객 요청','기타'];
 const ACCIDENT_TYPES = ['자차','대물','피해'];
 const INSURERS = ['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','한화손해보험','롯데손해보험','흥국화재','MG손해보험','AXA손해보험','하나손해보험','캐롯손해보험'];
@@ -139,8 +145,9 @@ function dueDiffLabel(o){
 }
 function toLocalInput(ts){ if(!ts) return ''; const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function normPhone(s){ const d = String(s||'').replace(/\D/g,''); if(d.length === 11) return d.replace(/(\d{3})(\d{4})(\d{4})/,'$1-$2-$3'); if(d.length === 10) return d.replace(/(\d{3})(\d{3})(\d{4})/,'$1-$2-$3'); return String(s||'').trim(); }
-const nextName = st => st >= 6 ? '' : STAGES[st + 1];
-const stageLabel = st => st < 0 ? '입고 대기' : STAGES[st] + ' 완료';
+const nextName = st => st >= LAST ? '' : NEXT[st + 1];
+const stageLabel = st => st < 0 ? '입고 대기' : STATUS[st];
+const photoLabel = l => l.kind === 'photo' ? '추가' : (l.stage === 1 ? '중간' : (STAGES[l.stage] || ''));
 const contactOf = o => Array.isArray(o.order_contacts) ? (o.order_contacts[0] || {}) : (o.order_contacts || {});
 
 let toastT;
@@ -152,10 +159,13 @@ function go(view, id){ S.view = view; S.id = id || null; S.editing = false; S.du
 function flags(o){
   const f = [];
   if(o.delivered_at){ f.push(['done','딜리버리 완료']); return f; }
-  if(o.stage === 6) f.push(['ok','딜리버리 대기']);
-  if(o.stage === -1) f.push(['info','입고 대기']);
-  if(o.stage >= 0 && o.stage < 6 && hoursSince(o.updated_at) > 24) f.push(['warn','미업데이트']);
-  if(o.due_date && o.stage < 6 && o.due_date < todayStr()) f.push(['bad','출고 지연']);
+  if(o.stage === LAST) f.push(['ok','딜리버리 대기']);
+  if(o.stage === -1){
+    const late = o.pickup_at ? hoursSince(o.pickup_at) > 24 : hoursSince(o.created_at) > 48;
+    f.push(late ? ['warn','입고 사진 없음'] : ['info','입고 대기']);
+  }
+  if(o.stage === 0 && o.intake_at && hoursSince(o.intake_at) > 24) f.push(['warn','중간 사진 없음']);
+  if(o.due_date && o.stage < LAST && o.due_date < todayStr()) f.push(['bad','출고 지연']);
   if(o.claim_status === '미접수' && hoursSince(o.created_at) > 24) f.push(['warn','보험 미접수']);
   return f;
 }
@@ -254,7 +264,7 @@ async function renderBoard(quiet){
     all: act.length,
     check: act.filter(needsCheck).length,
     out: S.orders.filter(o => o.released_at && toLocalInput(o.released_at).slice(0,10) === today).length,
-    wait: act.filter(o => o.stage === 6).length,
+    wait: act.filter(o => o.stage === LAST).length,
     done: S.orders.filter(o => o.delivered_at).length
   };
   const kpi = (key, label, cls) => `<button class="kpi ${cls||''} ${S.filter===key?'on':''}" data-act="filter" data-f="${key}"><span>${label}</span><b>${k[key]}</b></button>`;
@@ -273,24 +283,24 @@ function drawBoardList(){
   if(S.filter === 'all') list = list.filter(o => !o.delivered_at);
   if(S.filter === 'check') list = list.filter(o => !o.delivered_at && needsCheck(o));
   if(S.filter === 'out') list = list.filter(o => o.released_at && toLocalInput(o.released_at).slice(0,10) === today);
-  if(S.filter === 'wait') list = list.filter(o => !o.delivered_at && o.stage === 6);
+  if(S.filter === 'wait') list = list.filter(o => !o.delivered_at && o.stage === LAST);
   if(S.filter === 'done') list = list.filter(o => o.delivered_at);
   const q = S.q.trim().replace(/\s/g,'');
   if(q) list = list.filter(o => [o.plate, contactOf(o).customer_name, o.shops && o.shops.name, o.car_model].join(' ').replace(/\s/g,'').includes(q));
   box.innerHTML = list.length ? `<div class="list">${list.map(o => orderCard(o, true)).join('')}</div>` : '<div class="empty">해당하는 차량이 없습니다</div>';
 }
 function orderCard(o, hq){
-  const pct = Math.round((o.stage + 1) / 7 * 100);
+  const pct = Math.round((o.stage + 1) / STAGES.length * 100);
   const c = contactOf(o);
   const meta = hq ? [o.car_model, c.customer_name, o.shops ? o.shops.name : '공업사 미배정'] : [o.car_model];
-  const tail = o.stage === 6
+  const tail = o.stage === LAST
     ? `출고 ${fmtDT(o.released_at)} · 수리 ${repairDays(o)}일`
     : `출고 예정 ${fmtDay(o.due_date)}`;
   return `<button class="oc ${needsCheck(o)?'alert':''}" data-act="open" data-id="${o.id}">
     <div class="between" style="width:100%"><span class="plate">${esc(o.plate)}</span><span>${badges(o)}</span></div>
     <div class="sub">${meta.filter(Boolean).map(esc).join(' · ')}</div>
     <div class="bar" style="width:100%"><i style="width:${pct}%"></i></div>
-    <div class="between" style="width:100%;font-size:13px"><b>${stageLabel(o.stage)}${o.stage < 6 ? ' · 다음 ' + nextName(o.stage) : ''}</b><span class="sub" style="font-size:13px">${tail}</span></div>
+    <div class="between" style="width:100%;font-size:13px"><b>${stageLabel(o.stage)}${o.stage < LAST ? ' · 다음 ' + nextName(o.stage) : ''}</b><span class="sub" style="font-size:13px">${tail}</span></div>
     <div class="sub" style="font-size:12px">마지막 업데이트 ${ago(o.updated_at)}</div>
   </button>`;
 }
@@ -299,7 +309,7 @@ function orderCard(o, hq){
 async function renderShopList(quiet){
   if(!quiet) $app.innerHTML = '<div class="empty">불러오는 중…</div>';
   let qy = sb.from('repair_orders').select('*').order('updated_at', { ascending: false });
-  qy = S.showReleased ? qy.not('released_at', 'is', null).limit(100) : qy.lt('stage', 6);
+  qy = S.showReleased ? qy.not('released_at', 'is', null).limit(100) : qy.lt('stage', LAST);
   const { data, error } = await qy;
   if(error) return fail(error);
   if(S.view !== 'list') return;
@@ -349,11 +359,11 @@ async function renderDetail(id){
     : `<span class="sub">${shopNote ? 'A/S 기간(출고 후 1년)이 지나 표시되지 않습니다' : '-'}</span>`;
   const addrHidden = shopNote && o.delivered_at;
   const photoHtml = logs.filter(l => l.photo_path).map(l => `
-    <button class="ph" data-act="photo" data-url="${esc(urls[l.photo_path] || '')}" aria-label="${esc(STAGES[l.stage] || '')} 사진 크게 보기">
+    <button class="ph" data-act="photo" data-url="${esc(urls[l.photo_path] || '')}" aria-label="${esc(photoLabel(l))} 사진 크게 보기">
       ${urls[l.photo_path] ? `<img src="${esc(urls[l.photo_path])}" alt="" loading="lazy">` : ''}
-      <em>${esc(STAGES[l.stage] || '')}</em><small>${fmtDT(l.created_at)}</small></button>`).join('');
+      <em>${esc(photoLabel(l))}</em><small>${fmtDT(l.created_at)}</small></button>`).join('');
   const tl = logs.map(l => {
-    const t = l.kind === 'stage' ? `${STAGES[l.stage]} 완료` : l.kind === 'due' ? `출고 예정일 변경 · ${l.note || ''}` : (l.note || '');
+    const t = l.kind === 'stage' ? DONE_TITLE[l.stage] : l.kind === 'photo' ? '추가 사진' : l.kind === 'due' ? `출고 예정일 변경 · ${l.note || ''}` : (l.note || '');
     return `<li><span>${esc(t)}</span><span class="sub" style="font-size:13px;white-space:nowrap">${fmtDT(l.created_at)}</span></li>`;
   }).join('');
 
@@ -366,7 +376,7 @@ async function renderDetail(id){
   <div style="margin:0 0 12px 4px">${badges(o)}</div>
 
   <div class="card"><h2>수리 진행 단계</h2>${stepper(o.stage)}
-    ${o.stage === 6 ? `<p class="note" style="margin:12px 0 0">출고 ${fmtDT(o.released_at)} · 수리기간 <b>${repairDays(o)}일</b>${dueDiffLabel(o) ? ' · ' + dueDiffLabel(o) : ''}</p>` : ''}</div>
+    ${o.stage === LAST ? `<p class="note" style="margin:12px 0 0">출고 ${fmtDT(o.released_at)} · 수리기간 <b>${repairDays(o)}일</b>${dueDiffLabel(o) ? ' · ' + dueDiffLabel(o) : ''}</p>` : ''}</div>
 
   <div class="card"><h2>고객</h2>
     <dl class="kv">
@@ -388,7 +398,7 @@ async function renderDetail(id){
       <dt>입고</dt><dd>${fmtDT(o.intake_at)}</dd>
       <dt>출고 예정</dt><dd>${fmtDay(o.due_date)}${o.delay_reason ? ` <span class="sub">(${esc(o.delay_reason)})</span>` : ''}</dd>
     </dl>
-    ${o.stage < 6 ? `<div style="margin-top:12px"><button class="btn sm" data-act="toggleDue">${S.dueOpen ? '닫기' : (o.due_date ? '출고 예정일 변경' : '출고 예정일 입력')}</button></div>` : ''}
+    ${o.stage < LAST ? `<div style="margin-top:12px"><button class="btn sm" data-act="toggleDue">${S.dueOpen ? '닫기' : (o.due_date ? '출고 예정일 변경' : '출고 예정일 입력')}</button></div>` : ''}
     ${S.dueOpen ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:12px">
       <label class="f">새 출고 예정일<input type="date" id="dueDate" value="${esc(o.due_date || '')}"></label>
       ${o.due_date ? `<label class="f">변경 사유 (필수)<select id="dueReason"><option value="">선택하세요</option>${DELAY_REASONS.map(r => `<option>${r}</option>`).join('')}</select></label>` : ''}
@@ -407,9 +417,10 @@ async function renderDetail(id){
   </div>
 
   <div class="bottom"><div class="in2">
-    ${o.stage < 6 ? `<button class="btn pri big" data-act="advance">${ICON_CAM} 사진 찍고 '${nextName(o.stage)}' 완료</button>` : ''}
-    ${o.stage === 6 && !o.delivered_at && hq ? `<button class="btn green big" data-act="deliver">고객 딜리버리 완료</button>` : ''}
-    ${o.stage === 6 && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
+    ${o.stage < LAST ? `<button class="btn pri big" data-act="advance">${ICON_CAM} ${BTN[o.stage + 1]}</button>` : ''}
+    ${o.stage >= 0 && o.stage < LAST ? `<button class="btn" data-act="extraPhoto">사진 추가 (선택)</button>` : ''}
+    ${o.stage === LAST && !o.delivered_at && hq ? `<button class="btn green big" data-act="deliver">고객 딜리버리 완료</button>` : ''}
+    ${o.stage === LAST && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
   </div></div>`;
 }
 function stepper(stage){
@@ -437,15 +448,20 @@ document.getElementById('cam').addEventListener('change', async e => {
     const path = `${o.id}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.jpg`;
     const up = await sb.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg' });
     if(up.error) throw up.error;
+    if(S.extra){
+      const { error: ex } = await sb.rpc('add_photo', { p_order: o.id, p_photo: path });
+      if(ex) throw ex;
+      busy(false); toast('사진을 추가했습니다'); S.extra = false; return renderDetail(o.id);
+    }
     const { data: nxt, error } = await sb.rpc('advance_stage', { p_order: o.id, p_photo: path, p_note: null });
     if(error) throw error;
     const { data: fresh } = await sb.from('repair_orders').select('*').eq('id', o.id).maybeSingle();
     busy(false);
     const f = fresh || o;
-    S.after = nxt === 6
+    S.after = nxt === LAST
       ? { title: `출고 완료 · 수리 ${repairDays(f)}일`, sub: `${f.plate} · 입고 ${fmtDay(f.intake_at || f.created_at)} → 출고 ${fmtDay(f.released_at)}${dueDiffLabel(f) ? ' · ' + dueDiffLabel(f) : ''}`,
           note: '카컨 본사에 출고가 기록됐어요. 고객 딜리버리는 본사에서 진행합니다.', id: o.id }
-      : { title: `${STAGES[nxt]} 완료`, sub: `${f.plate} · 사진 1장 등록`, note: '카컨 영업팀에 바로 전달됐어요. 고객 안내는 영업팀이 합니다.', id: o.id };
+      : { title: DONE_TITLE[nxt], sub: `${f.plate} · 사진 1장 등록${nxt === 0 && f.due_date ? ' · 출고 예정 ' + fmtDay(f.due_date) : ''}`, note: '카컨 영업팀에 바로 전달됐어요. 고객 안내는 영업팀이 합니다.', id: o.id };
     go('done');
   }catch(err){ fail(err); }
 });
@@ -608,7 +624,8 @@ document.addEventListener('click', async e => {
       case 'shoptab': S.showReleased = t.dataset.v === '1'; return renderShopList();
       case 'photo': if(t.dataset.url) window.open(t.dataset.url, '_blank', 'noopener'); return;
       case 'call': sb.rpc('log_contact', { p_order: id, p_action: 'call' }); return; // 기본 동작(전화 걸기) 유지
-      case 'advance': S.pending = S.cur; document.getElementById('cam').click(); return;
+      case 'advance': S.extra = false; S.pending = S.cur; document.getElementById('cam').click(); return;
+      case 'extraPhoto': S.extra = true; S.pending = S.cur; document.getElementById('cam').click(); return;
       case 'toggleDue': S.dueOpen = !S.dueOpen; return renderDetail(S.id);
       case 'saveDue': {
         const d = document.getElementById('dueDate').value;
