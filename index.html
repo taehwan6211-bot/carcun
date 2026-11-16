@@ -258,7 +258,7 @@ function render(){
 }
 function renderPending(){
   $app.innerHTML = `<div class="center"><div class="h1">승인 대기 중</div>
-    <p class="sub">본사에서 계정 권한을 설정하면 사용할 수 있습니다.<br>설정 후 아래 버튼을 눌러주세요.</p>
+    <p class="sub">본사에서 계정 권한을 설정하면 사용할 수 있습니다.<br>설정되면 이 화면이 자동으로 넘어갑니다.</p>
     <button class="btn pri" data-act="reload">다시 확인</button></div>`;
 }
 
@@ -394,6 +394,11 @@ async function renderDetail(id){
   <div class="card"><h2>수리 진행 단계</h2>${stepper(o.stage)}
     ${o.stage === LAST ? `<p class="note" style="margin:12px 0 0">출고 ${fmtDT(o.released_at)} · 수리기간 <b>${repairDays(o)}일</b>${dueDiffLabel(o) ? ' · ' + dueDiffLabel(o) : ''}</p>` : ''}</div>
 
+  ${hq ? `<div class="card"><h2>고객 안내 문구</h2>
+    <textarea class="in" id="custMsg" rows="6" style="min-height:150px">${esc(customerMsg(o, c))}</textarea>
+    <div class="row" style="margin-top:8px"><button class="btn sm pri" data-act="copyMsg">문구 복사</button>
+      <span class="sub" style="font-size:13px">필요하면 고친 뒤 복사해서 카톡·문자로 보내세요</span></div></div>` : ''}
+
   <div class="card"><h2>고객</h2>
     <dl class="kv">
       <dt>고객명</dt><dd>${esc(c.customer_name || '-')}</dd>
@@ -469,6 +474,7 @@ document.getElementById('cam').addEventListener('change', async e => {
       if(ex) throw ex;
       busy(false); toast('사진을 추가했습니다'); S.extra = false; return renderDetail(o.id);
     }
+    markMine(o.id, { stage: o.stage + 1 });
     const { data: nxt, error } = await sb.rpc('advance_stage', { p_order: o.id, p_photo: path, p_note: null });
     if(error) throw error;
     const { data: fresh } = await sb.from('repair_orders').select('*').eq('id', o.id).maybeSingle();
@@ -677,6 +683,26 @@ async function renderAdmin(){
   </div>`;
 }
 
+// ===================== 고객 안내 문구 =====================
+const CS_PHONE = '1555-4655';
+function customerMsg(o, c){
+  const who = c.customer_name ? `${c.customer_name} 고객님` : '고객님';
+  const car = [o.car_model, o.plate].filter(Boolean).join(' ');
+  const due = o.due_date ? fmtDay(o.due_date) : '';
+  const delay = o.delay_reason && due ? `\n${o.delay_reason} 사유로 출고 예정일이 ${due}로 조정되었습니다. 양해 부탁드립니다.` : '';
+  let body;
+  if(o.delivered_at) body = `${car} 차량 딜리버리가 완료되었습니다.\n수리 부위는 출고일로부터 1년간 무상 A/S가 보장됩니다. 이용해 주셔서 감사합니다.`;
+  else if(o.stage === LAST) body = `${car} 차량 수리가 완료되었습니다. (수리기간 ${repairDays(o)}일)\n세차까지 마친 뒤 딜리버리 일정을 안내드리겠습니다.\n수리 부위는 1년 무상 A/S가 보장됩니다.`;
+  else if(o.stage === 1) body = `${car} 차량은 판금 작업을 마치고 도장 작업 중입니다.${due && !delay ? `\n출고 예정일은 ${due}입니다.` : ''}${delay}`;
+  else if(o.stage === 0) body = `${car} 차량이 공업사에 입고되어 수리를 시작했습니다.${due && !delay ? `\n출고 예정일은 ${due}입니다.` : ''}${delay}\n진행 상황은 단계별로 안내드리겠습니다.`;
+  else body = `${car} 차량 사고 수리 접수가 완료되었습니다.${o.pickup_at ? `\n픽업 예정: ${fmtDT(o.pickup_at)}` : ''}\n전문 인력이 무료로 픽업하고, 수리 후 세차까지 마쳐 다시 가져다드립니다.`;
+  return `[카컨] ${who}, 카컨입니다.\n${body}\n문의: ${CS_PHONE}`;
+}
+async function copyText(t){
+  try{ await navigator.clipboard.writeText(t); return true; }catch(e){}
+  try{ const ta = document.getElementById('custMsg'); ta.focus(); ta.select(); return document.execCommand('copy'); }catch(e){ return false; }
+}
+
 // ===================== 실시간 알림 =====================
 // 앱(브라우저)이 열려 있는 동안만 동작한다. 앱을 닫으면 알림이 오지 않는다.
 // 공업사: 새 차량 배정 / 본사: 출고 완료·새 경고(소리), 입고·중간 사진(알림판만)
@@ -684,7 +710,7 @@ const LIVE = { ch: null, known: null, ctx: null, warnReady: false };
 const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
 const lsSet = (k, v) => { try{ localStorage.setItem(k, v); }catch(e){} };
 const bellOn = () => lsGet('carcun_bell') === '1';
-const LIVE_COLS = 'id, plate, car_model, stage, shop_id, delivered_at';
+const LIVE_COLS = 'id, plate, car_model, stage, shop_id, delivered_at, due_date, delay_reason';
 const STAGE_ALERT = ['입고 사진 등록', '중간 사진 등록', '출고 완료'];
 
 function audioCtx(){
@@ -735,13 +761,14 @@ async function toggleBell(){
   beep(); toast('알림음을 켰습니다. 방금 소리가 들렸다면 정상입니다');
 }
 
+function markMine(id, patch){ const k = LIVE.known && LIVE.known.get(id); if(k) Object.assign(k, patch); }
 function shopNameOf(id){ return (S.shops.find(s => s.id === id) || {}).name || ''; }
 // 차량 한 대의 새 상태를 이전 상태와 비교해 알림을 판단
 function handleRow(n){
   if(!n || !n.id || !LIVE.known) return;
   const prev = LIVE.known.get(n.id);
   if(n.delivered_at){ LIVE.known.delete(n.id); return; }
-  LIVE.known.set(n.id, { stage: n.stage, shop_id: n.shop_id });
+  LIVE.known.set(n.id, { stage: n.stage, shop_id: n.shop_id, due_date: n.due_date || null });
   if(S.me.role === 'shop'){
     if(n.shop_id === S.me.shop_id && (!prev || prev.shop_id !== n.shop_id) && n.stage < LAST)
       notify('새 차량 배정', `${n.plate}${n.car_model ? ' · ' + n.car_model : ''}`, n.id, true);
@@ -749,6 +776,9 @@ function handleRow(n){
     const sh = shopNameOf(n.shop_id);
     if(n.stage === LAST) notify('출고 완료', `${n.plate}${sh ? ' · ' + sh : ''} · 딜리버리 안내 필요`, n.id, true);
     else notify(STAGE_ALERT[n.stage], `${n.plate}${sh ? ' · ' + sh : ''}`, n.id, false);
+  } else if(prev && prev.due_date && n.due_date && prev.due_date !== n.due_date && n.stage < LAST){
+    const sh = shopNameOf(n.shop_id);
+    notify('출고 예정일 변경', `${n.plate}${sh ? ' · ' + sh : ''} · ${fmtDay(prev.due_date)} → ${fmtDay(n.due_date)}${n.delay_reason ? ' · ' + n.delay_reason : ''} · 고객 안내 필요`, n.id, true);
   }
 }
 async function startLive(){
@@ -757,7 +787,7 @@ async function startLive(){
   const me = S.me;
   const { data } = await sb.from('repair_orders').select(LIVE_COLS).is('delivered_at', null);
   if(S.me !== me) return;
-  LIVE.known = new Map((data || []).map(o => [o.id, { stage: o.stage, shop_id: o.shop_id }]));
+  LIVE.known = new Map((data || []).map(o => [o.id, { stage: o.stage, shop_id: o.shop_id, due_date: o.due_date || null }]));
   LIVE.ch = sb.channel('orders-live')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'repair_orders' }, p => { handleRow(p.new); liveRefresh(p.new && p.new.id); })
     .subscribe();
@@ -773,7 +803,7 @@ async function resyncLive(){
   if(!data || !LIVE.known) return;
   const ids = new Set(data.map(o => o.id));
   let changed = false;
-  data.forEach(o => { const p = LIVE.known.get(o.id); if(!p || p.stage !== o.stage || p.shop_id !== o.shop_id){ handleRow(o); changed = true; } });
+  data.forEach(o => { const p = LIVE.known.get(o.id); if(!p || p.stage !== o.stage || p.shop_id !== o.shop_id || (p.due_date || null) !== (o.due_date || null)){ handleRow(o); changed = true; } });
   [...LIVE.known.keys()].forEach(id => { if(!ids.has(id)){ LIVE.known.delete(id); changed = true; } });
   if(changed) liveRefresh(null);
 }
@@ -829,6 +859,7 @@ document.addEventListener('click', async e => {
       case 'reload': await loadMe(); startLive(); return go('list');
       case 'logout': stopLive(); await sb.auth.signOut(); S.me = null; return renderLogin();
       case 'bell': return toggleBell();
+      case 'copyMsg': { const ok = await copyText(document.getElementById('custMsg').value); return toast(ok ? '복사했습니다. 카톡·문자에 붙여넣으세요' : '복사가 안 됩니다. 문구를 길게 눌러 직접 복사하세요'); }
       case 'alertOpen': { const i = +t.dataset.i; S.alerts.splice(i, 1); drawAlerts(); if(id) return go('detail', id); S.filter = 'check'; return go('list'); }
       case 'alertClose': S.alerts.splice(+t.dataset.i, 1); return drawAlerts();
       case 'filter': S.filter = t.dataset.f; document.querySelectorAll('.kpi').forEach(k => k.classList.toggle('on', k.dataset.f === S.filter)); return drawBoardList();
@@ -844,7 +875,7 @@ document.addEventListener('click', async e => {
         const reason = rEl ? rEl.value : '';
         if(!d) return toast('날짜를 선택하세요');
         if(rEl && !reason) return toast('변경 사유를 선택하세요');
-        busy(true);
+        busy(true); markMine(S.cur.id, { due_date: d });
         const { error } = await sb.rpc('change_due', { p_order: S.cur.id, p_date: d, p_reason: reason });
         busy(false); if(error) throw error;
         S.dueOpen = false; toast('출고 예정일을 저장했습니다'); return renderDetail(S.id);
@@ -885,7 +916,7 @@ document.addEventListener('click', async e => {
       case 'cancelEdit': S.editing = false; return renderDetail(S.id);
       case 'saveEdit': {
         const d = readForm(); const msg = validate(d); if(msg) return toast(msg);
-        busy(true, '저장 중…');
+        busy(true, '저장 중…'); markMine(S.cur.id, { due_date: d.order.due_date, shop_id: d.order.shop_id });
         const r1 = await sb.from('repair_orders').update({ ...d.order, updated_at: new Date().toISOString() }).eq('id', S.cur.id);
         if(r1.error) throw r1.error;
         const r2 = await sb.from('order_contacts').upsert({ order_id: S.cur.id, ...d.contact });
@@ -929,6 +960,13 @@ document.addEventListener('input', e => { if(e.target.id === 'q'){ S.q = e.targe
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && S.me){ resyncLive(); liveRefresh(null); } });
 // 첫 터치 때 알림음 준비(브라우저는 사용자가 한 번 눌러야 소리를 허용함)
 document.addEventListener('pointerdown', () => { if(bellOn()) audioCtx(); }, { once: true });
+
+// 승인 대기 화면: 20초마다 권한이 지정됐는지 자동 확인
+setInterval(async () => {
+  if(!S.me || document.visibilityState !== 'visible' || !(S.me.role === 'pending' || !S.me.active)) return;
+  await loadMe();
+  if(S.me && S.me.role !== 'pending' && S.me.active){ toast('권한이 지정되었습니다'); startLive(); go('list'); }
+}, 20000);
 
 // 목록 화면은 1분마다 자동 새로고침
 // + 1분마다 변경 확인(실시간 연결이 끊겨도 늦어도 1분 안에 알림)
