@@ -997,6 +997,14 @@ async function resyncLive(){
   }
   if(changed) liveRefresh(null);
 }
+// 앱을 켜 둔 채 SQL이 실행된 경우: 1분 안에 새 기능(접수 취소, 메모 분리)을 감지해 화면을 바꿈
+async function reprobeFeatures(){
+  if(!S.me || (S.hasCancel && S.hasMemoVis)) return;
+  let changed = false;
+  if(!S.hasCancel){ const r = await sb.from('repair_orders').select('canceled_at').limit(1); if(!r.error){ S.hasCancel = true; changed = true; } }
+  if(!S.hasMemoVis){ const r = await sb.from('memos').select('visibility').limit(1); if(!r.error){ S.hasMemoVis = true; changed = true; } }
+  if(changed && !S.dirty && document.getElementById('busy').style.display !== 'flex') render();
+}
 // 1분마다 내 권한이 바뀌었는지 확인(대표가 역할·소속·사용 여부를 바꾼 경우)
 async function checkMyRole(){
   if(!S.me || S.me.role === 'pending') return;
@@ -1126,7 +1134,8 @@ document.addEventListener('click', async e => {
         if(vis === 'shared' && isHQ() && PHONE_RE.test(body) && !confirm('공유 메모에 전화번호가 있습니다.\n공업사에 그대로 보입니다. 저장할까요?\n(고객 연락처는 내부 메모에 쓰는 것을 권합니다)')) return;
         busy(true);
         const row = { order_id: S.cur.id, body, created_by: S.me.id, author_name: S.me.name || S.me.email };
-        if(S.hasMemoVis) row.visibility = vis === 'shared' ? 'shared' : 'internal';
+        // 예전 한 칸 화면(vis 없음)에서 써도 공업사는 '공유', 본사는 '내부'로 저장
+        if(S.hasMemoVis) row.visibility = vis === 'shared' || (!vis && !isHQ()) ? 'shared' : 'internal';
         const { error } = await sb.from('memos').insert(row);
         busy(false); if(error) throw error;
         el.value = ''; S.dirty = false;
@@ -1241,7 +1250,7 @@ setInterval(async () => {
 // + 1분마다 변경 확인(실시간 연결이 끊겨도 늦어도 1분 안에 알림)
 setInterval(() => {
   if(!S.me || document.visibilityState !== 'visible') return;
-  resyncLive(); checkMyRole();
+  resyncLive(); checkMyRole(); reprobeFeatures();
   if(S.view !== 'list'){ if(isHQ()) pollWarnings(); return; }
   if(document.activeElement && document.activeElement.id === 'q') return;
   isHQ() ? renderBoard(true) : renderShopList(true);
