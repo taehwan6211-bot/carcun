@@ -133,7 +133,9 @@ const ACCIDENT_TYPES = ['자차','대물','피해'];
 const INSURERS = ['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','한화손해보험','롯데손해보험','흥국화재','MG손해보험','AXA손해보험','하나손해보험','캐롯손해보험'];
 const SOURCES = ['네이버 플레이스','네이버 블로그','카카오 채널','전화','지인 소개','기타'];
 const DOW = '일월화수목금토';
-const CANCEL_REASONS = ['고객 취소','중복 등록','테스트','기타'];
+const CANCEL_REASONS = ['고객 취소','전손 처리','다른 곳에서 수리','중복 등록','테스트','기타'];
+// 입고 대기: 본사 누구나 / 입고·수리 중: 대표만 / 출고 이후: 불가
+const canCancel = o => S.hasCancel && isHQ() && !o.canceled_at && !o.delivered_at && (o.stage === -1 || (isAdmin() && o.stage >= 0 && o.stage < LAST));
 
 const S = { hasCancel:false, cancelOpen:false, me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
 const $app = document.getElementById('app');
@@ -431,12 +433,12 @@ async function renderDetail(id){
       <dt>입고</dt><dd>${fmtDT(o.intake_at)}</dd>
       <dt>출고 예정</dt><dd>${fmtDay(o.due_date)}${o.delay_reason ? ` <span class="sub">(${esc(o.delay_reason)})</span>` : ''}</dd>
     </dl>
-    ${hq && S.hasCancel && o.stage === -1 && !o.canceled_at ? `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+    ${canCancel(o) ? `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
       ${S.cancelOpen ? `<div style="display:flex;flex-direction:column;gap:10px">
         <label class="f">취소 사유 (필수)<select id="cancelReason"><option value="">선택하세요</option>${CANCEL_REASONS.map(r => `<option>${r}</option>`).join('')}</select></label>
         <label class="f">상세 내용 (기타일 때 필수)<input id="cancelNote" placeholder="예: 고객이 다른 곳에서 수리하기로 함"></label>
         <div class="row"><button class="btn orange" data-act="doCancel" style="flex:1">접수 취소</button><button class="btn" data-act="toggleCancel">닫기</button></div>
-        <p class="sub" style="font-size:13px;margin:0">취소해도 기록은 남고, 현황판 '취소(30일)'에서 되돌릴 수 있습니다.</p></div>`
+        <p class="sub" style="font-size:13px;margin:0">${o.stage >= 0 ? '<b style="color:var(--bad)">공업사에서 작업 중인 차량입니다.</b> 취소하면 공업사에 작업 중단 알림이 갑니다. ' : ''}취소해도 사진과 기록은 남고, 현황판 '취소(30일)'에서 되돌릴 수 있습니다.</p></div>`
       : '<button class="btn sm" data-act="toggleCancel" style="color:var(--bad)">접수 취소</button>'}</div>` : ''}
     ${o.stage < LAST && !o.canceled_at ? `<div style="margin-top:12px"><button class="btn sm" data-act="toggleDue">${S.dueOpen ? '닫기' : (o.due_date ? '출고 예정일 변경' : '출고 예정일 입력')}</button></div>` : ''}
     ${S.dueOpen ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:12px">
@@ -788,7 +790,10 @@ function handleRow(n){
   if(!n || !n.id || !LIVE.known) return;
   const prev = LIVE.known.get(n.id);
   if(n.delivered_at || n.canceled_at){
-    if(n.canceled_at && prev && S.me.role === 'shop') notify('접수 취소', `${n.plate} · 본사에서 접수를 취소했습니다`, null, false);
+    if(n.canceled_at && prev && S.me.role === 'shop'){
+      if(prev.stage >= 0) notify('작업 중단', `${n.plate} · 본사에서 접수를 취소했습니다. 작업을 멈춰 주세요`, n.id, true);
+      else notify('접수 취소', `${n.plate} · 본사에서 접수를 취소했습니다`, null, false);
+    }
     LIVE.known.delete(n.id); return;
   }
   LIVE.known.set(n.id, { stage: n.stage, shop_id: n.shop_id, due_date: n.due_date || null });
@@ -889,7 +894,7 @@ document.addEventListener('click', async e => {
         if(!r) return toast('취소 사유를 선택하세요');
         if(r === '기타' && !note) return toast('기타 사유는 상세 내용을 적어주세요');
         const reason = note ? `${r} · ${note}` : r;
-        if(!confirm(`${S.cur.plate} 접수를 취소할까요?\n사유: ${reason}`)) return;
+        if(!confirm(`${S.cur.plate} 접수를 취소할까요?\n사유: ${reason}${S.cur.stage >= 0 ? '\n\n⚠️ 공업사에서 작업 중인 차량입니다. 공업사에 작업 중단 알림이 갑니다.' : ''}`)) return;
         busy(true);
         const { error } = await sb.from('repair_orders').update({ canceled_at: new Date().toISOString(), cancel_reason: reason, canceled_by: S.me.id, updated_at: new Date().toISOString() }).eq('id', S.cur.id);
         if(error){ busy(false); throw error; }
