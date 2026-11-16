@@ -88,6 +88,14 @@ label.f textarea,textarea.in{height:auto;min-height:90px;padding:10px 12px;resiz
 .tbl td{padding:8px;border-top:1px solid var(--bg);vertical-align:middle}
 .tbl select,.tbl input[type=text]{height:40px;border:1px solid #D1D5DB;border-radius:8px;padding:0 8px;min-width:100px}
 .scroll{overflow-x:auto}
+#alerts{max-width:1080px;margin:8px auto 0;padding:0 16px;display:flex;flex-direction:column;gap:6px}
+#alerts[hidden]{display:none}
+.al{display:flex;align-items:stretch;background:var(--info-bg);border:1px solid #BFDBFE;border-radius:12px;overflow:hidden}
+.al.loud{background:var(--warn-bg);border-color:#FDBA74}
+.al-main{flex:1;text-align:left;background:none;border:0;padding:10px 12px;cursor:pointer;font-size:15px;line-height:1.4}
+.al-main small{color:var(--muted);margin-left:4px;font-size:13px}
+.al-x{background:none;border:0;width:44px;font-size:22px;cursor:pointer;color:var(--muted)}
+.btn.bell-on{background:var(--ok-bg);border-color:#6EE7B7;color:var(--ok)}
 #toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:#111827;color:#fff;padding:12px 18px;border-radius:12px;font-size:15px;font-weight:600;z-index:50;display:none;max-width:90vw}
 #busy{position:fixed;inset:0;background:rgba(255,255,255,.75);display:none;align-items:center;justify-content:center;z-index:40;font-weight:800;font-size:17px}
 .login{max-width:380px;margin:12vh auto 0;padding:0 16px}
@@ -96,6 +104,7 @@ label.f textarea,textarea.in{height:auto;min-height:90px;padding:10px 12px;resiz
 </head>
 <body>
 <div class="top" id="top" hidden></div>
+<div id="alerts" hidden aria-live="polite"></div>
 <main class="wrap" id="app"></main>
 <div id="toast" role="status"></div>
 <div id="busy"><span id="busyMsg">처리 중…</span></div>
@@ -200,7 +209,7 @@ document.addEventListener('submit', async e => {
   const { error } = await sb.auth.signInWithPassword({ email: fd.get('email').trim(), password: fd.get('pw') });
   busy(false);
   if(error){ document.getElementById('loginErr').textContent = '이메일 또는 비밀번호가 맞지 않습니다'; return; }
-  await loadMe(); go('list');
+  await loadMe(); go('list'); startLive();
 });
 
 async function loadMe(){
@@ -229,6 +238,7 @@ function renderTop(){
   const where = S.me.role === 'shop' && S.me.shop ? S.me.shop.name : (S.me.role === 'admin' ? '대표' : S.me.role === 'staff' ? '본사' : '');
   $top.innerHTML = `<div class="top-in"><span class="brand">카컨 수리관리</span>${nav}
     <span class="who">${esc(where)} · ${esc(S.me.name || S.me.email)}</span>
+    <button class="btn sm ${bellOn() ? 'bell-on' : ''}" data-act="bell" title="알림음 켜기/끄기">${bellOn() ? '🔔 알림 켜짐' : '🔕 알림 켜기'}</button>
     <button class="btn sm" data-act="logout">로그아웃</button></div>`;
 }
 function render(){
@@ -258,6 +268,7 @@ async function renderBoard(quiet){
   if(error) return fail(error);
   if(S.view !== 'list') return;
   S.orders = data || [];
+  checkWarnings(S.orders);
   const act = S.orders.filter(o => !o.delivered_at);
   const today = todayStr();
   const k = {
@@ -661,6 +672,144 @@ async function renderAdmin(){
   </div>`;
 }
 
+// ===================== 실시간 알림 =====================
+// 앱(브라우저)이 열려 있는 동안만 동작한다. 앱을 닫으면 알림이 오지 않는다.
+// 공업사: 새 차량 배정 / 본사: 출고 완료·새 경고(소리), 입고·중간 사진(알림판만)
+const LIVE = { ch: null, known: null, ctx: null, warnReady: false };
+const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
+const lsSet = (k, v) => { try{ localStorage.setItem(k, v); }catch(e){} };
+const bellOn = () => lsGet('carcun_bell') === '1';
+const LIVE_COLS = 'id, plate, car_model, stage, shop_id, delivered_at';
+const STAGE_ALERT = ['입고 사진 등록', '중간 사진 등록', '출고 완료'];
+
+function audioCtx(){
+  try{
+    LIVE.ctx = LIVE.ctx || new (window.AudioContext || window.webkitAudioContext)();
+    if(LIVE.ctx.state === 'suspended') LIVE.ctx.resume();
+  }catch(e){}
+  return LIVE.ctx;
+}
+function beep(){
+  if(!bellOn()) return;
+  const ctx = audioCtx();
+  if(ctx) try{
+    [880, 1175, 880].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain(), t0 = ctx.currentTime + i * 0.18;
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.16);
+      o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0 + 0.17);
+    });
+  }catch(e){}
+  try{ if(navigator.vibrate) navigator.vibrate([200, 100, 200]); }catch(e){}
+}
+// loud: 소리·진동 + (다른 탭을 보고 있으면) PC 알림창, quiet: 알림판에만 표시
+function notify(title, body, orderId, loud){
+  S.alerts = [{ title, body, id: orderId || '', at: new Date(), loud }, ...(S.alerts || [])].slice(0, 5);
+  drawAlerts();
+  if(!loud) return;
+  beep(); toast(`${title} · ${body}`);
+  if(bellOn() && 'Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible'){
+    try{
+      const n = new Notification('카컨 · ' + title, { body, tag: 'carcun-' + (orderId || title) });
+      n.onclick = () => { window.focus(); if(orderId) go('detail', orderId); n.close(); };
+    }catch(e){}
+  }
+}
+function drawAlerts(){
+  const box = document.getElementById('alerts'); if(!box) return;
+  const list = S.me ? (S.alerts || []) : [];
+  box.hidden = !list.length;
+  box.innerHTML = list.map((a, i) => `<div class="al ${a.loud ? 'loud' : ''}">
+    <button class="al-main" data-act="alertOpen" data-i="${i}" ${a.id ? `data-id="${esc(a.id)}"` : ''}><b>${esc(a.title)}</b> · ${esc(a.body)}<small>${pad(a.at.getHours())}:${pad(a.at.getMinutes())}</small></button>
+    <button class="al-x" data-act="alertClose" data-i="${i}" aria-label="알림 닫기">×</button></div>`).join('');
+}
+async function toggleBell(){
+  if(bellOn()){ lsSet('carcun_bell', '0'); renderTop(); return toast('알림음을 껐습니다. 알림판 표시는 계속됩니다'); }
+  lsSet('carcun_bell', '1'); audioCtx(); renderTop();
+  if('Notification' in window && Notification.permission === 'default'){ try{ await Notification.requestPermission(); }catch(e){} }
+  beep(); toast('알림음을 켰습니다. 방금 소리가 들렸다면 정상입니다');
+}
+
+function shopNameOf(id){ return (S.shops.find(s => s.id === id) || {}).name || ''; }
+// 차량 한 대의 새 상태를 이전 상태와 비교해 알림을 판단
+function handleRow(n){
+  if(!n || !n.id || !LIVE.known) return;
+  const prev = LIVE.known.get(n.id);
+  if(n.delivered_at){ LIVE.known.delete(n.id); return; }
+  LIVE.known.set(n.id, { stage: n.stage, shop_id: n.shop_id });
+  if(S.me.role === 'shop'){
+    if(n.shop_id === S.me.shop_id && (!prev || prev.shop_id !== n.shop_id) && n.stage < LAST)
+      notify('새 차량 배정', `${n.plate}${n.car_model ? ' · ' + n.car_model : ''}`, n.id, true);
+  } else if(prev && n.stage > prev.stage && n.stage >= 0){
+    const sh = shopNameOf(n.shop_id);
+    if(n.stage === LAST) notify('출고 완료', `${n.plate}${sh ? ' · ' + sh : ''} · 딜리버리 안내 필요`, n.id, true);
+    else notify(STAGE_ALERT[n.stage], `${n.plate}${sh ? ' · ' + sh : ''}`, n.id, false);
+  }
+}
+async function startLive(){
+  stopLive();
+  if(!S.me || !S.me.active || S.me.role === 'pending') return;
+  const me = S.me;
+  const { data } = await sb.from('repair_orders').select(LIVE_COLS).is('delivered_at', null);
+  if(S.me !== me) return;
+  LIVE.known = new Map((data || []).map(o => [o.id, { stage: o.stage, shop_id: o.shop_id }]));
+  LIVE.ch = sb.channel('orders-live')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'repair_orders' }, p => { handleRow(p.new); liveRefresh(p.new && p.new.id); })
+    .subscribe();
+}
+function stopLive(){
+  if(LIVE.ch){ try{ sb.removeChannel(LIVE.ch); }catch(e){} LIVE.ch = null; }
+  LIVE.known = null; LIVE.warnReady = false; S.alerts = []; drawAlerts();
+}
+// 실시간 연결이 끊겼거나 꺼져 있어도 놓친 변경을 잡아내는 예비 확인
+async function resyncLive(){
+  if(!LIVE.known || !S.me) return;
+  const { data } = await sb.from('repair_orders').select(LIVE_COLS).is('delivered_at', null);
+  if(!data || !LIVE.known) return;
+  const ids = new Set(data.map(o => o.id));
+  let changed = false;
+  data.forEach(o => { const p = LIVE.known.get(o.id); if(!p || p.stage !== o.stage || p.shop_id !== o.shop_id){ handleRow(o); changed = true; } });
+  [...LIVE.known.keys()].forEach(id => { if(!ids.has(id)){ LIVE.known.delete(id); changed = true; } });
+  if(changed) liveRefresh(null);
+}
+// 보고 있는 화면을 조용히 새로고침(입력 중이면 건드리지 않음)
+let liveT;
+function liveRefresh(id){
+  clearTimeout(liveT);
+  liveT = setTimeout(() => {
+    if(!S.me || document.visibilityState !== 'visible') return;
+    if(document.getElementById('busy').style.display === 'flex') return;
+    const a = document.activeElement;
+    const typing = a && (a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || (a.tagName === 'INPUT' && a.type !== 'checkbox'));
+    if(S.view === 'list' && !(a && a.id === 'q')) return isHQ() ? renderBoard(true) : renderShopList(true);
+    if(S.view === 'detail' && id && S.id === id && !S.editing && !S.dueOpen && !typing) return renderDetail(id);
+  }, 800);
+}
+// 본사: 새로 생긴 경고만 알림(이미 본 경고는 다시 울리지 않음)
+function checkWarnings(orders){
+  if(!isHQ()) return;
+  const key = 'carcun_warn_seen_' + S.me.id;
+  const now = [];
+  orders.filter(o => !o.delivered_at).forEach(o => flags(o).forEach(([k, t]) => { if(k === 'warn' || k === 'bad') now.push(o.id + '|' + t); }));
+  const stored = lsGet(key);
+  let seen; try{ seen = new Set(JSON.parse(stored || '[]')); }catch(e){ seen = new Set(); }
+  const fresh = now.filter(k => !seen.has(k));
+  lsSet(key, JSON.stringify(now));
+  const first = stored === null && !LIVE.warnReady;
+  LIVE.warnReady = true;
+  if(first || !fresh.length) return;
+  fresh.slice(0, 3).forEach(k => {
+    const [id, t] = k.split('|'); const o = orders.find(x => x.id === id) || {};
+    const sh = (o.shops && o.shops.name) || shopNameOf(o.shop_id);
+    notify('확인 필요 · ' + t, `${o.plate || ''}${sh ? ' · ' + sh : ''}`, id, true);
+  });
+  if(fresh.length > 3) notify('확인 필요', `그 외 ${fresh.length - 3}건 · 현황판의 '확인 필요'를 눌러 보세요`, null, false);
+}
+async function pollWarnings(){
+  const { data } = await sb.from('repair_orders').select('*, shops(name)').is('delivered_at', null);
+  if(data) checkWarnings(data);
+}
+
 // ===================== 클릭 처리 =====================
 document.addEventListener('click', async e => {
   const t = e.target.closest('[data-act]');
@@ -672,8 +821,11 @@ document.addEventListener('click', async e => {
       case 'open': return go('detail', id);
       case 'back': return go('list');
       case 'refresh': return render();
-      case 'reload': await loadMe(); return go('list');
-      case 'logout': await sb.auth.signOut(); S.me = null; return renderLogin();
+      case 'reload': await loadMe(); startLive(); return go('list');
+      case 'logout': stopLive(); await sb.auth.signOut(); S.me = null; return renderLogin();
+      case 'bell': return toggleBell();
+      case 'alertOpen': { const i = +t.dataset.i; S.alerts.splice(i, 1); drawAlerts(); if(id) return go('detail', id); S.filter = 'check'; return go('list'); }
+      case 'alertClose': S.alerts.splice(+t.dataset.i, 1); return drawAlerts();
       case 'filter': S.filter = t.dataset.f; document.querySelectorAll('.kpi').forEach(k => k.classList.toggle('on', k.dataset.f === S.filter)); return drawBoardList();
       case 'shoptab': S.showReleased = t.dataset.v === '1'; return renderShopList();
       case 'photo': if(t.dataset.url) window.open(t.dataset.url, '_blank', 'noopener'); return;
@@ -768,15 +920,23 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('input', e => { if(e.target.id === 'q'){ S.q = e.target.value; drawBoardList(); } });
 
+// 화면으로 돌아오면(휴대폰 잠금 해제 등) 놓친 변경을 바로 확인
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && S.me){ resyncLive(); liveRefresh(null); } });
+// 첫 터치 때 알림음 준비(브라우저는 사용자가 한 번 눌러야 소리를 허용함)
+document.addEventListener('pointerdown', () => { if(bellOn()) audioCtx(); }, { once: true });
+
 // 목록 화면은 1분마다 자동 새로고침
+// + 1분마다 변경 확인(실시간 연결이 끊겨도 늦어도 1분 안에 알림)
 setInterval(() => {
-  if(!S.me || S.view !== 'list' || document.visibilityState !== 'visible') return;
+  if(!S.me || document.visibilityState !== 'visible') return;
+  resyncLive();
+  if(S.view !== 'list'){ if(isHQ()) pollWarnings(); return; }
   if(document.activeElement && document.activeElement.id === 'q') return;
   isHQ() ? renderBoard(true) : renderShopList(true);
 }, 60000);
 
-sb.auth.onAuthStateChange(ev => { if(ev === 'SIGNED_OUT'){ S.me = null; renderLogin(); } });
-(async () => { await loadMe(); render(); })();
+sb.auth.onAuthStateChange(ev => { if(ev === 'SIGNED_OUT'){ stopLive(); S.me = null; renderLogin(); } });
+(async () => { await loadMe(); render(); startLive(); })();
 </script>
 </body>
 </html>
