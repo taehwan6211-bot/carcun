@@ -28,6 +28,19 @@ a{color:var(--brand)}
 .nav button{height:40px;padding:0 12px;border:none;background:transparent;border-radius:10px;font-weight:700;color:var(--muted);cursor:pointer}
 .nav button.on{background:var(--bg);color:var(--ink)}
 .who{font-size:13px;color:var(--muted)}
+/* 휴대폰: 상단 메뉴를 좁게(이름 숨김, 버튼 작게) */
+@media (max-width:640px){
+  .who{display:none}
+  .top-in{gap:4px;padding:8px 12px}
+  .brand{font-size:16px}
+  .top .btn.sm{height:34px;padding:0 8px;font-size:13px}
+  .nav button{height:34px;padding:0 8px;font-size:14px}
+}
+.todo-sec{margin-bottom:18px}
+.todo-sec h3{margin:0 0 8px;font-size:16px;display:flex;align-items:center;gap:8px}
+.todo-sec h3 .cnt{background:var(--bg);border-radius:999px;padding:1px 10px;font-size:14px}
+.todo-why{font-size:13px;font-weight:700;color:var(--warn)}
+.ops-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;font-size:14px}
 .wrap{max-width:1080px;margin:0 auto;padding:16px 16px 120px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
 .card h2{margin:0 0 12px;font-size:16px;font-weight:800}
@@ -125,7 +138,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const STAGES = ['입고','수리 중','출고'];
 const LAST = STAGES.length - 1;
 const STATUS = ['입고 완료','수리 중','출고 완료'];
-const NEXT = ['입고 사진','중간 사진','출고 사진'];
+const NEXT = ['입고 사진','도장 전 사진','출고 사진'];
 const BTN = ['사진 찍고 입고 완료','중간 사진 등록 (판금 후 도장 전)','완성차 사진 찍고 출고 완료'];
 const DONE_TITLE = ['입고 완료','중간 사진 등록 완료','출고 완료'];
 const DEFAULT_DAYS = 3; // 입고일 + 3일 = 기본 출고 예정일
@@ -194,7 +207,9 @@ function go(view, id, opt){
   render(); window.scrollTo(0,0);
 }
 // 앱 안의 ← 버튼: 이전 화면이 있으면 휴대폰 뒤로가기와 똑같이 동작
-function goBack(){ if(history.state && history.state.d > 0) history.back(); else go('list', null, { replace: true }); }
+// 첫 화면: 본사는 '오늘 할 일'(기능이 켜져 있을 때), 공업사는 작업 목록
+const homeView = () => (isHQ() && S.hasOps) ? 'today' : 'list';
+function goBack(){ if(history.state && history.state.d > 0) history.back(); else go(homeView(), null, { replace: true }); }
 window.addEventListener('popstate', e => {
   if(!S.me) return;
   const st = e.state || { view: 'list' };
@@ -203,7 +218,7 @@ window.addEventListener('popstate', e => {
   // 저장 안 한 입력이 있는데 '머무르기'를 고르면 화면을 그대로 둠
   if(S.dirty && !leaveOk()){ try{ history.pushState({ view: S.view, id: S.id, edit: S.editing, d: (st.d || 0) + 1 }, ''); }catch(err){} return; }
   if(st.root) toast('뒤로 버튼을 한 번 더 누르면 앱이 닫힙니다');
-  go(st.view || 'list', st.id, { fromHistory: true, edit: st.edit });
+  go(st.root ? homeView() : (st.view || 'list'), st.id, { fromHistory: true, edit: st.edit });
 });
 // 시작 화면 아래에 "한 번 더 누르면 종료" 안내용 기록을 하나 깔아 둠
 try{ history.replaceState({ view: 'list', d: 0, root: true }, ''); history.pushState({ view: 'list', d: 1 }, ''); }catch(e){}
@@ -254,7 +269,7 @@ document.addEventListener('submit', async e => {
   const { error } = await sb.auth.signInWithPassword({ email: fd.get('email').trim(), password: fd.get('pw') });
   busy(false);
   if(error){ document.getElementById('loginErr').textContent = '이메일 또는 비밀번호가 맞지 않습니다'; return; }
-  await loadMe(); go('list'); startLive();
+  await loadMe(); go(homeView()); startLive();
 });
 
 async function loadMe(){
@@ -275,6 +290,10 @@ async function loadMe(){
   // 메모 내부/공유 구분 칸이 DB에 있는지 확인(SQL 실행 전에는 예전처럼 한 칸)
   const mprobe = await sb.from('memos').select('visibility').limit(1);
   S.hasMemoVis = !mprobe.error;
+  // 영업 담당자·고객 안내·공업사 확인 칸이 DB에 있는지(SQL 실행 전에는 숨김)
+  const oprobe = await sb.from('repair_orders').select('assignee_id').limit(1);
+  S.hasOps = !oprobe.error;
+  if(isHQ()) await loadStaff();
 }
 const notCanceled = qy => S.hasCancel ? qy.is('canceled_at', null) : qy;
 const isLive = o => !o.delivered_at && !o.canceled_at;
@@ -284,6 +303,7 @@ async function loadShops(){ const { data } = await sb.from('shops').select('*').
 function renderTop(){
   $top.hidden = false;
   const nav = isHQ() ? `<nav class="nav" aria-label="메뉴">
+      ${S.hasOps ? `<button data-act="nav" data-view="today" class="${S.view==='today'?'on':''}">오늘 할 일</button>` : ''}
       <button data-act="nav" data-view="list" class="${S.view==='list'?'on':''}">현황</button>
       <button data-act="nav" data-view="new" class="${S.view==='new'?'on':''}">차량 등록</button>
       <button data-act="nav" data-view="stats" class="${S.view==='stats'?'on':''}">입력률</button>
@@ -304,6 +324,7 @@ function render(){
   if(S.view === 'new' && isHQ()) return renderNew();
   if(S.view === 'admin' && isAdmin()) return renderAdmin();
   if(S.view === 'stats' && isHQ()) return renderStats();
+  if(S.view === 'today' && isHQ() && S.hasOps) return renderToday();
   return isHQ() ? renderBoard() : renderShopList();
 }
 function renderPending(){
@@ -357,20 +378,74 @@ function drawBoardList(){
   if(q) list = list.filter(o => [o.plate, contactOf(o).customer_name, o.shops && o.shops.name, o.car_model].join(' ').replace(/\s/g,'').includes(q));
   box.innerHTML = list.length ? `<div class="list">${list.map(o => orderCard(o, true)).join('')}</div>` : '<div class="empty">해당하는 차량이 없습니다</div>';
 }
-function orderCard(o, hq){
+// ===================== 영업부 중간 역할: 담당자·고객 안내·공업사 확인 =====================
+async function loadStaff(){
+  const { data } = await sb.from('profiles').select('id, name, role, active').in('role', ['admin', 'staff']).order('name');
+  S.staff = (data || []).filter(p => p.active);
+}
+const staffName = id => { const p = (S.staff || []).find(s => s.id === id); return p ? (p.name || '이름 없음') : ''; };
+// 사진·예정일 변경(또는 접수) 뒤 아직 [안내 완료]를 안 눌렀으면 '안내 필요'
+const needNotify = o => S.hasOps && isLive(o) && !!o.customer_event_at && (!o.customer_notified_at || o.customer_event_at > o.customer_notified_at);
+// 공업사에 배정됐는데 공업사가 아직 차량을 열어 보지 않음
+const unseenByShop = o => S.hasOps && isLive(o) && !!o.shop_id && !o.shop_seen_at && o.stage === -1;
+const opsBadges = o => !isHQ() ? '' : [
+  unseenByShop(o) ? '<span class="badge b-warn">공업사 미확인</span>' : '',
+  needNotify(o) ? '<span class="badge b-info">안내 필요</span>' : ''
+].filter(Boolean).join(' ');
+
+function orderCard(o, hq, why){
   const pct = Math.round((o.stage + 1) / STAGES.length * 100);
   const c = contactOf(o);
-  const meta = hq ? [o.car_model, c.customer_name, o.shops ? o.shops.name : '공업사 미배정'] : [o.car_model];
+  const meta = hq ? [o.car_model, c.customer_name, o.shops ? o.shops.name : '공업사 미배정', S.hasOps && o.assignee_id ? '담당 ' + staffName(o.assignee_id) : ''] : [o.car_model];
   const tail = o.stage === LAST
     ? `출고 ${fmtDT(o.released_at)} · 수리 ${repairDays(o)}일`
-    : `출고 예정 ${fmtDay(o.due_date)}`;
+    : (o.stage === -1 && o.pickup_at ? `픽업 ${fmtDT(o.pickup_at)}` : `출고 예정 ${fmtDay(o.due_date)}`);
   return `<button class="oc ${needsCheck(o)?'alert':''}" data-act="open" data-id="${o.id}">
-    <div class="between" style="width:100%"><span class="plate">${esc(o.plate)}</span><span>${badges(o)}</span></div>
+    <div class="between" style="width:100%"><span class="plate">${esc(o.plate)}</span><span>${badges(o)} ${hq ? opsBadges(o) : ''}</span></div>
+    ${why ? `<div class="todo-why">${esc(why)}</div>` : ''}
     <div class="sub">${meta.filter(Boolean).map(esc).join(' · ')}</div>
     <div class="bar" style="width:100%"><i style="width:${pct}%"></i></div>
     <div class="between" style="width:100%;font-size:13px"><b>${stageLabel(o.stage)}${o.stage < LAST ? ' · 다음 ' + nextName(o.stage) : ''}</b><span class="sub" style="font-size:13px">${tail}</span></div>
     <div class="sub" style="font-size:12px">마지막 업데이트 ${ago(o.updated_at)}</div>
   </button>`;
+}
+
+// ===================== 오늘 할 일 (본사 첫 화면) =====================
+const todayMineKey = () => 'carcun_today_mine_' + (S.me ? S.me.id : '');
+const todayMine = () => lsGet(todayMineKey()) !== '0';
+async function renderToday(quiet){
+  if(!quiet) $app.innerHTML = '<div class="empty">불러오는 중…</div>';
+  const { data, error } = await notCanceled(sb.from('repair_orders')
+    .select('*, shops(name), order_contacts(customer_name)').is('delivered_at', null)
+    .order('updated_at', { ascending: false }));
+  if(error) return fail(error);
+  if(S.view !== 'today') return;
+  const mine = todayMine();
+  const all = (data || []).filter(isLive);
+  const list = mine ? all.filter(o => o.assignee_id === S.me.id) : all;
+  const today = todayStr();
+  const H = 3600000;
+  const hrs = x => Math.max(0, Math.floor((Date.now() - Date.parse(x)) / H));
+  const secs = [
+    { key:'unseen', icon:'⚠️', title:'공업사 미확인 배정', hint:'배정했지만 공업사가 아직 차량을 열어 보지 않았습니다. 단톡방이나 전화로 확인하세요',
+      items: list.filter(unseenByShop), why: o => `배정 후 ${hrs(o.created_at)}시간 · ${o.shops ? o.shops.name : ''}` },
+    { key:'notify', icon:'📞', title:'고객 안내 필요', hint:'차량 화면에서 [문구 복사] → 고객에게 보내고 [안내 완료]',
+      items: list.filter(needNotify), why: o => `안내할 내용: ${o.customer_event || '진행'} · ${fmtDT(o.customer_event_at)}` },
+    { key:'late', icon:'⏰', title:'출고 지연', hint:'공업사에 상황을 확인하고 고객에게 안내하세요',
+      items: list.filter(o => o.due_date && o.stage < LAST && o.due_date < today), why: o => `출고 예정 ${fmtDay(o.due_date)} 지남` },
+    { key:'deliver', icon:'🚚', title:'딜리버리 대기', hint:'출고된 차량입니다. 딜리버리 일정을 잡고 완료 처리하세요',
+      items: list.filter(o => o.stage === LAST && !o.delivered_at), why: o => `출고 ${fmtDT(o.released_at)}` }
+  ];
+  const total = secs.reduce((s, x) => s + x.items.length, 0);
+  const noOwner = mine ? 0 : all.filter(o => !o.assignee_id).length;
+  $app.innerHTML = `
+    <div class="between" style="margin-bottom:12px;gap:8px;flex-wrap:wrap"><div><div class="sub">${esc(S.me.name || '')} · ${fmtDay(today)}</div><div class="h1">오늘 할 일 ${total}건</div></div>
+      <div class="row"><button class="btn sm ${mine ? 'pri' : ''}" data-act="todayMine" data-v="1">내 차량만</button><button class="btn sm ${mine ? '' : 'pri'}" data-act="todayMine" data-v="0">영업부 전체</button><button class="btn sm" data-act="refresh">새로고침</button></div></div>
+    ${noOwner ? `<p class="note" style="margin-top:0">담당자가 없는 차량이 ${noOwner}대 있습니다. 차량 화면에서 담당자를 지정하세요.</p>` : ''}
+    ${total ? secs.filter(s => s.items.length).map(s => `<div class="todo-sec" data-sec="${s.key}"><h3>${s.icon} ${s.title} <span class="cnt">${s.items.length}</span></h3>
+      <p class="sub" style="font-size:13px;margin:0 0 8px">${s.hint}</p>
+      <div class="list">${s.items.map(o => orderCard(o, true, s.why(o))).join('')}</div></div>`).join('')
+      : `<div class="empty">${mine ? '내 담당 차량 중' : '영업부 전체에'} 처리할 일이 없습니다 👍</div>`}`;
 }
 
 // ===================== 공업사별 입력률 (본사) =====================
@@ -493,6 +568,8 @@ async function renderDetail(id){
   S.cur = o; S.curContact = c;
   const hq = isHQ();
 
+  // 공업사가 차량을 처음 열면 '배정 확인'을 자동 기록(공업사 버튼 없음)
+  if(!hq && S.hasOps && !o.shop_seen_at) sb.rpc('mark_seen', { p_order: id }).then(() => {}, () => {});
   if(S.editing && hq){ $app.innerHTML = orderForm(o, (S.retryContact && S.retryContact.id === id) ? S.retryContact.contact : c, true); if(S.retryContact && S.retryContact.id === id) S.dirty = true; return; }
 
   const shopNote = !hq;
@@ -515,7 +592,11 @@ async function renderDetail(id){
     <div style="flex:1;min-width:0"><div class="plate">${esc(o.plate)}</div><div class="sub">${esc([o.car_model, o.shops && o.shops.name].filter(Boolean).join(' · '))}</div></div>
     ${hq ? '<button class="btn sm" data-act="edit">정보 수정</button>' : ''}
   </div>
-  <div style="margin:0 0 12px 4px">${badges(o)}</div>
+  <div style="margin:0 0 12px 4px">${badges(o)} ${hq ? opsBadges(o) : ''}</div>
+  ${hq && S.hasOps ? `<div class="card" style="padding:12px 16px"><label class="row" style="gap:8px;align-items:center;margin:0"><b style="font-size:14px">영업 담당</b>
+    <select id="assigneeSel" class="in" style="max-width:220px;height:40px">
+      <option value="">담당자 없음</option>${(S.staff || []).map(p => `<option value="${esc(p.id)}" ${p.id === o.assignee_id ? 'selected' : ''}>${esc(p.name || '이름 없음')}${p.id === S.me.id ? ' (나)' : ''}</option>`).join('')}
+    </select></label></div>` : ''}
   ${o.canceled_at ? `<div class="card" style="border:2px solid var(--line);background:#F9FAFB"><h2>접수 취소된 차량</h2>
     <p class="sub" style="margin:0">${fmtDT(o.canceled_at)} · ${esc(o.cancel_reason || '')}</p>
     ${hq ? '<div style="margin-top:12px"><button class="btn sm" data-act="undoCancel">취소 되돌리기</button></div>' : ''}</div>` : ''}
@@ -526,7 +607,15 @@ async function renderDetail(id){
   ${hq && !o.canceled_at ? `<div class="card"><h2>고객 안내 문구</h2>
     <textarea class="in" id="custMsg" rows="6" style="min-height:150px">${esc(customerMsg(o, c))}</textarea>
     <div class="row" style="margin-top:8px"><button class="btn sm pri" data-act="copyMsg">문구 복사</button>
-      <span class="sub" style="font-size:13px">필요하면 고친 뒤 복사해서 카톡·문자로 보내세요</span></div></div>` : ''}
+      <span class="sub" style="font-size:13px">필요하면 고친 뒤 복사해서 카톡·문자로 보내세요</span></div>
+    ${S.hasOps ? `<div class="ops-line" style="border-top:1px solid var(--line);padding-top:10px">
+      ${needNotify(o)
+        ? `<span class="badge b-info">📞 안내 필요</span><span>${esc(o.customer_event || '진행')} · ${fmtDT(o.customer_event_at)}</span>
+           <button class="btn sm green" data-act="notifyDone">고객에게 안내 완료</button>`
+        : (o.customer_notified_at
+          ? `<span class="badge b-ok">✅ 안내 완료</span><span class="sub">${esc(staffName(o.customer_notified_by) || '')} · ${fmtDT(o.customer_notified_at)}</span>`
+          : '<span class="sub">아직 안내할 내용이 없습니다</span>')}
+    </div>` : ''}</div>` : ''}
 
   <div class="card"><h2>고객</h2>
     <dl class="kv">
@@ -547,7 +636,11 @@ async function renderDetail(id){
       ${hq ? `<dt>유입 경로</dt><dd>${esc(o.source || '-')}</dd>` : ''}
       <dt>입고</dt><dd>${fmtDT(o.intake_at)}</dd>
       <dt>출고 예정</dt><dd>${fmtDay(o.due_date)}${o.delay_reason ? ` <span class="sub">(${esc(o.delay_reason)})</span>` : ''}</dd>
+      ${hq && S.hasOps && o.shop_id ? `<dt>공업사 확인</dt><dd>${o.shop_seen_at ? `✅ ${fmtDT(o.shop_seen_at)}` : '<span style="color:var(--warn);font-weight:700">⏳ 아직 차량을 열어 보지 않음</span>'}</dd>` : ''}
     </dl>
+    ${hq && o.stage < LAST && !o.canceled_at ? `<div class="row" style="margin-top:12px;gap:8px">
+      <button class="btn sm" data-act="advance">${ICON_CAM} ${esc(NEXT[o.stage + 1])} 대신 올리기</button>
+      ${o.stage >= 0 ? '<button class="btn sm" data-act="extraPhoto">사진 추가</button>' : ''}</div>` : ''}
     ${canCancel(o) ? `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
       ${S.cancelOpen ? `<div style="display:flex;flex-direction:column;gap:10px">
         <label class="f">취소 사유 (필수)<select id="cancelReason"><option value="">선택하세요</option>${CANCEL_REASONS.map(r => `<option>${r}</option>`).join('')}</select></label>
@@ -571,8 +664,9 @@ async function renderDetail(id){
 
   <div class="bottom"><div class="in2">
     ${o.canceled_at ? '<div class="note" style="text-align:center">접수 취소된 차량입니다</div>' : ''}
-    ${o.stage < LAST && !o.canceled_at ? `<button class="btn pri big" data-act="advance">${ICON_CAM} ${BTN[o.stage + 1]}</button>` : ''}
-    ${o.stage >= 0 && o.stage < LAST && !o.canceled_at ? `<button class="btn" data-act="extraPhoto">사진 추가 (선택)</button>` : ''}
+    ${!hq && o.stage < LAST && !o.canceled_at ? `<button class="btn pri big" data-act="advance">${ICON_CAM} ${BTN[o.stage + 1]}</button>` : ''}
+    ${!hq && o.stage >= 0 && o.stage < LAST && !o.canceled_at ? `<button class="btn" data-act="extraPhoto">사진 추가 (선택)</button>` : ''}
+    ${hq && o.stage < LAST && !o.canceled_at ? '<div class="sub" style="text-align:center;font-size:13px">사진은 공업사가 올립니다 · 대신 올릴 때는 위 수리 정보 칸의 버튼</div>' : ''}
     ${o.stage === LAST && !o.delivered_at && hq ? `<button class="btn green big" data-act="deliver">고객 딜리버리 완료</button>` : ''}
     ${o.stage === LAST && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
   </div></div>`;
@@ -1013,10 +1107,11 @@ async function resyncLive(){
 }
 // 앱을 켜 둔 채 SQL이 실행된 경우: 1분 안에 새 기능(접수 취소, 메모 분리)을 감지해 화면을 바꿈
 async function reprobeFeatures(){
-  if(!S.me || (S.hasCancel && S.hasMemoVis)) return;
+  if(!S.me || (S.hasCancel && S.hasMemoVis && S.hasOps)) return;
   let changed = false;
   if(!S.hasCancel){ const r = await sb.from('repair_orders').select('canceled_at').limit(1); if(!r.error){ S.hasCancel = true; changed = true; } }
   if(!S.hasMemoVis){ const r = await sb.from('memos').select('visibility').limit(1); if(!r.error){ S.hasMemoVis = true; changed = true; } }
+  if(!S.hasOps){ const r = await sb.from('repair_orders').select('assignee_id').limit(1); if(!r.error){ S.hasOps = true; if(isHQ()) await loadStaff(); changed = true; } }
   if(changed && !S.dirty && document.getElementById('busy').style.display !== 'flex') render();
 }
 // 1분마다 내 권한이 바뀌었는지 확인(대표가 역할·소속·사용 여부를 바꾼 경우)
@@ -1034,7 +1129,7 @@ async function checkMyRole(){
   const before = `${S.me.role}|${S.me.shop_id || ''}|${!!S.me.active}`;
   if(now === before) return;
   await loadMe(); if(!S.me) return;
-  toast('계정 권한이 변경되었습니다'); startLive(); go('list', null, { replace: true, force: true });
+  toast('계정 권한이 변경되었습니다'); startLive(); go(homeView(), null, { replace: true, force: true });
 }
 // 보고 있는 화면을 조용히 새로고침(입력 중이면 건드리지 않음)
 let liveT;
@@ -1046,6 +1141,7 @@ function liveRefresh(id){
     const a = document.activeElement;
     const typing = a && (a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || (a.tagName === 'INPUT' && a.type !== 'checkbox'));
     if(S.view === 'list' && !(a && a.id === 'q')) return isHQ() ? renderBoard(true) : renderShopList(true);
+    if(S.view === 'today' && isHQ()) return renderToday(true);
     if(S.view === 'detail' && id && S.id === id && !S.editing && !S.dueOpen && !typing) return renderDetail(id);
   }, 800);
 }
@@ -1085,9 +1181,16 @@ document.addEventListener('click', async e => {
       case 'open': return go('detail', id);
       case 'back': return goBack();
       case 'refresh': if(!leaveOk()) return; S.dirty = false; return render();
-      case 'reload': await loadMe(); startLive(); return go('list');
+      case 'reload': await loadMe(); startLive(); return go(homeView());
       case 'logout': if(!leaveOk()) return; S.dirty = false; stopLive(); await sb.auth.signOut(); S.me = null; return renderLogin();
       case 'bell': return toggleBell();
+      case 'todayMine': lsSet(todayMineKey(), t.dataset.v); return renderToday();
+      case 'notifyDone': {
+        busy(true);
+        const { error } = await sb.from('repair_orders').update({ customer_notified_at: new Date().toISOString(), customer_notified_by: S.me.id }).eq('id', S.cur.id);
+        busy(false); if(error) throw error;
+        toast('고객 안내 완료로 기록했습니다'); return renderDetail(S.id);
+      }
       case 'statDays': S.statDays = +t.dataset.v; return renderStats();
       case 'toggleCancel': S.cancelOpen = !S.cancelOpen; return renderDetail(S.id);
       case 'doCancel': {
@@ -1177,6 +1280,12 @@ document.addEventListener('click', async e => {
       case 'saveNew': {
         const d = readForm(); const msg = validate(d); if(msg) return toast(msg);
         busy(true, '등록 중…');
+        // 차량과 연락처를 DB 함수 하나로 한 번에 저장(반쪽 저장 없음)
+        if(S.hasOps){
+          const { data: newId, error: ce } = await sb.rpc('create_order', { p_order: d.order, p_contact: d.contact });
+          if(!ce){ busy(false); S.dirty = false; toast('등록했습니다. 공업사 화면에 바로 표시됩니다'); return go('detail', newId, { replace: true }); }
+          if(ce.code !== 'PGRST202') throw ce; // 함수가 없을 때만 예전 방식으로
+        }
         const { data: row, error } = await sb.from('repair_orders').insert({ ...d.order, created_by: S.me.id }).select('id').single();
         if(error) throw error;
         // 연락처 저장 실패 시 한 번 더 시도. 그래도 실패하면 입력값을 살려 수정 화면으로 보냄
@@ -1233,7 +1342,7 @@ document.addEventListener('click', async e => {
         }).eq('id', id);
         if(error) throw error;
         // 내 계정 권한을 바꿨으면 화면에 바로 반영
-        if(id === S.me.id){ await loadMe(); toast('내 권한이 변경되었습니다'); startLive(); return go('list', null, { replace: true, force: true }); }
+        if(id === S.me.id){ await loadMe(); toast('내 권한이 변경되었습니다'); startLive(); return go(homeView(), null, { replace: true, force: true }); }
         return toast('저장했습니다');
       }
     }
@@ -1244,6 +1353,16 @@ document.addEventListener('input', e => { if(e.target.id === 'q'){ S.q = e.targe
 const DRAFT_IDS = ['memoBody', 'memoInternal', 'memoShared', 'paste', 'cancelNote', 'cancelReason', 'dueDate', 'dueReason'];
 const markDirty = e => { if(e.target.closest && (e.target.closest('#orderForm') || DRAFT_IDS.includes(e.target.id))) S.dirty = true; };
 document.addEventListener('input', markDirty);
+// 영업 담당자 변경(선택하면 바로 저장, 수정 이력은 DB가 자동 기록)
+document.addEventListener('change', async e => {
+  if(e.target.id !== 'assigneeSel' || !S.cur) return;
+  try{
+    busy(true);
+    const { error } = await sb.from('repair_orders').update({ assignee_id: e.target.value || null }).eq('id', S.cur.id);
+    busy(false); if(error) throw error;
+    toast(e.target.value ? `담당자를 ${staffName(e.target.value)}(으)로 바꿨습니다` : '담당자를 비웠습니다');
+  }catch(err){ fail(err); renderDetail(S.id); }
+});
 document.addEventListener('change', markDirty);
 // 새로고침·창 닫기 때도 확인
 window.addEventListener('beforeunload', e => { if(S.dirty){ e.preventDefault(); e.returnValue = ''; } });
@@ -1257,7 +1376,7 @@ document.addEventListener('pointerdown', () => { if(bellOn()) audioCtx(); }, { o
 setInterval(async () => {
   if(!S.me || document.visibilityState !== 'visible' || !(S.me.role === 'pending' || !S.me.active)) return;
   await loadMe();
-  if(S.me && S.me.role !== 'pending' && S.me.active){ toast('권한이 지정되었습니다'); startLive(); go('list'); }
+  if(S.me && S.me.role !== 'pending' && S.me.active){ toast('권한이 지정되었습니다'); startLive(); go(homeView()); }
 }, 20000);
 
 // 목록 화면은 1분마다 자동 새로고침
@@ -1265,13 +1384,18 @@ setInterval(async () => {
 setInterval(() => {
   if(!S.me || document.visibilityState !== 'visible') return;
   resyncLive(); checkMyRole(); reprobeFeatures();
+  if(S.view === 'today' && isHQ()){ pollWarnings(); if(!S.dirty) renderToday(true); return; }
   if(S.view !== 'list'){ if(isHQ()) pollWarnings(); return; }
   if(document.activeElement && document.activeElement.id === 'q') return;
   isHQ() ? renderBoard(true) : renderShopList(true);
 }, 60000);
 
 sb.auth.onAuthStateChange(ev => { if(ev === 'SIGNED_OUT'){ stopLive(); S.me = null; renderLogin(); } });
-(async () => { await loadMe(); render(); startLive(); })();
+(async () => {
+  await loadMe();
+  if(S.me){ S.view = homeView(); try{ history.replaceState({ view: S.view, d: 1 }, ''); }catch(e){} }
+  render(); startLive();
+})();
 </script>
 </body>
 </html>
