@@ -74,6 +74,7 @@ a{color:var(--brand)}
 .tl li{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--bg);padding-bottom:8px}
 .memo{border-bottom:1px solid var(--bg);padding:8px 0;font-size:15px;white-space:pre-wrap}
 .memo small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.linkbtn{background:none;border:0;padding:0;color:var(--brand);font-size:12px;text-decoration:underline;cursor:pointer}
 label.f{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:var(--muted)}
 label.f input,label.f select,label.f textarea,.in{height:48px;border:1px solid #D1D5DB;border-radius:10px;padding:0 12px;background:#fff;font-weight:500;width:100%}
 label.f textarea,textarea.in{height:auto;min-height:90px;padding:10px 12px;resize:vertical}
@@ -271,6 +272,9 @@ async function loadMe(){
   // 접수 취소 칸이 DB에 있는지 확인(SQL 실행 전에는 취소 기능을 숨김)
   const probe = await sb.from('repair_orders').select('canceled_at').limit(1);
   S.hasCancel = !probe.error;
+  // 메모 내부/공유 구분 칸이 DB에 있는지 확인(SQL 실행 전에는 예전처럼 한 칸)
+  const mprobe = await sb.from('memos').select('visibility').limit(1);
+  S.hasMemoVis = !mprobe.error;
 }
 const notCanceled = qy => S.hasCancel ? qy.is('canceled_at', null) : qy;
 const isLive = o => !o.delivered_at && !o.canceled_at;
@@ -463,9 +467,9 @@ async function renderShopList(quiet){
 // ===================== 차량 상세 =====================
 async function renderDetail(id){
   // 같은 차량 화면을 다시 그릴 때 쓰던 메모는 지우지 않고 유지
-  const memoEl = document.getElementById('memoBody');
   // 메모 칸에 적힌 차량 번호(data-oid)가 같을 때만 유지 → 다른 차량으로 옮겨가지 않음
-  const keepMemo = memoEl && memoEl.dataset.oid === String(id) ? memoEl.value : '';
+  const keepMemo = {};
+  document.querySelectorAll('textarea.memo-in').forEach(el => { if(el.dataset.oid === String(id) && el.value) keepMemo[el.id] = el.value; });
   $app.innerHTML = '<div class="empty">불러오는 중…</div>';
   const [ro, rl, rc, rm] = await Promise.all([
     sb.from('repair_orders').select('*, shops(name)').eq('id', id).maybeSingle(),
@@ -563,11 +567,7 @@ async function renderDetail(id){
 
   <div class="card"><h2>진행 기록</h2>${tl ? `<ul class="tl">${tl}</ul>` : '<div class="sub">기록이 없습니다</div>'}</div>
 
-  <div class="card"><h2>메모 · 고객 연락 기록</h2>
-    <textarea class="in" id="memoBody" data-oid="${esc(o.id)}" placeholder="예: 고객 통화, 출고 시간 14시로 조율"></textarea>
-    <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo">메모 저장</button></div>
-    ${memos.map(m => `<div class="memo">${esc(m.body)}<small>${esc(m.author_name || '')} · ${fmtDT(m.created_at)}</small></div>`).join('')}
-  </div>
+  ${memoCards(o, memos, hq)}
 
   <div class="bottom"><div class="in2">
     ${o.canceled_at ? '<div class="note" style="text-align:center">접수 취소된 차량입니다</div>' : ''}
@@ -576,9 +576,33 @@ async function renderDetail(id){
     ${o.stage === LAST && !o.delivered_at && hq ? `<button class="btn green big" data-act="deliver">고객 딜리버리 완료</button>` : ''}
     ${o.stage === LAST && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
   </div></div>`;
-  if(keepMemo){ const m = document.getElementById('memoBody'); if(m) m.value = keepMemo; }
+  Object.entries(keepMemo).forEach(([k, v]) => { const m = document.getElementById(k); if(m) m.value = v; });
   // 다시 그리면 남는 입력은 메모뿐이므로 그것만 기준으로 표시
-  S.dirty = !!keepMemo;
+  S.dirty = Object.keys(keepMemo).length > 0;
+}
+// 메모: 본사는 '본사 내부'와 '공업사 공유' 두 칸, 공업사는 공유 메모만(DB 권한으로도 제한)
+function memoCards(o, memos, hq){
+  const ta = (id, ph) => `<textarea class="in memo-in" id="${id}" data-oid="${esc(o.id)}" placeholder="${ph}"></textarea>`;
+  const item = m => `<div class="memo">${esc(m.body)}<small>${esc(m.author_name || '')} · ${fmtDT(m.created_at)}${hq && S.hasMemoVis
+    ? ` · <button class="linkbtn" data-act="memoVis" data-mid="${esc(m.id)}" data-v="${m.visibility === 'shared' ? 'internal' : 'shared'}">${m.visibility === 'shared' ? '내부 메모로 전환' : '공업사에 공유'}</button>` : ''}</small></div>`;
+  if(!S.hasMemoVis) return `<div class="card"><h2>메모 · 고객 연락 기록</h2>
+    ${ta('memoBody', '예: 고객 통화, 출고 시간 14시로 조율')}
+    <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo">메모 저장</button></div>
+    ${memos.map(item).join('')}</div>`;
+  if(!hq) return `<div class="card"><h2>본사와 공유하는 메모</h2>
+    ${ta('memoShared', '예: 부품 입고 지연, 출고 시간 문의')}
+    <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo" data-v="shared">메모 저장</button></div>
+    ${memos.map(item).join('') || '<div class="sub">메모가 없습니다</div>'}</div>`;
+  const inner = memos.filter(m => m.visibility !== 'shared'), shared = memos.filter(m => m.visibility === 'shared');
+  return `<div class="card"><h2>본사 내부 메모 <span class="badge b-done">공업사에 안 보임</span></h2>
+    ${ta('memoInternal', '예: 고객 통화, 민원, 비용 협의')}
+    <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo" data-v="internal">내부 메모 저장</button></div>
+    ${inner.map(item).join('') || '<div class="sub">메모가 없습니다</div>'}</div>
+  <div class="card" style="border:2px solid #FDBA74"><h2>공업사 공유 메모 <span class="badge b-warn">공업사도 봄</span></h2>
+    <p class="sub" style="font-size:13px;margin:0 0 8px">공업사에 전달할 내용만 쓰세요. 고객 연락처·개인 사정은 위 내부 메모에.</p>
+    ${ta('memoShared', '예: 도장 전 사진 요청, 출고 14시 예정')}
+    <div style="margin:8px 0 4px"><button class="btn sm orange" data-act="addMemo" data-v="shared">공업사에 공유</button></div>
+    ${shared.map(item).join('') || '<div class="sub">공유한 메모가 없습니다</div>'}</div>`;
 }
 function stepper(stage){
   return `<div class="steps">${STAGES.map((n,i) =>
@@ -1094,12 +1118,28 @@ document.addEventListener('click', async e => {
         toast('딜리버리 완료로 기록했습니다'); return renderDetail(S.id);
       }
       case 'addMemo': {
-        const body = document.getElementById('memoBody').value.trim();
+        const vis = t.dataset.v || '';
+        const el = document.getElementById(vis === 'shared' ? 'memoShared' : vis === 'internal' ? 'memoInternal' : 'memoBody');
+        const body = el.value.trim();
         if(!body) return toast('메모 내용을 입력하세요');
+        // 공유 메모에 전화번호가 있으면 한 번 더 확인
+        if(vis === 'shared' && isHQ() && PHONE_RE.test(body) && !confirm('공유 메모에 전화번호가 있습니다.\n공업사에 그대로 보입니다. 저장할까요?\n(고객 연락처는 내부 메모에 쓰는 것을 권합니다)')) return;
         busy(true);
-        const { error } = await sb.from('memos').insert({ order_id: S.cur.id, body, created_by: S.me.id, author_name: S.me.name || S.me.email });
+        const row = { order_id: S.cur.id, body, created_by: S.me.id, author_name: S.me.name || S.me.email };
+        if(S.hasMemoVis) row.visibility = vis === 'shared' ? 'shared' : 'internal';
+        const { error } = await sb.from('memos').insert(row);
         busy(false); if(error) throw error;
-        document.getElementById('memoBody').value = ''; S.dirty = false;
+        el.value = ''; S.dirty = false;
+        toast(vis === 'shared' && isHQ() ? '공업사와 공유했습니다' : '메모를 저장했습니다');
+        return renderDetail(S.id);
+      }
+      case 'memoVis': {
+        const v = t.dataset.v;
+        if(v === 'shared' && !confirm('이 메모를 공업사에 공개할까요?\n고객 연락처나 개인 사정이 없는지 확인해 주세요.')) return;
+        busy(true);
+        const { error } = await sb.rpc('set_memo_visibility', { p_memo: t.dataset.mid, p_visibility: v });
+        busy(false); if(error) throw error;
+        toast(v === 'shared' ? '공업사에 공유했습니다' : '본사 내부 메모로 바꿨습니다');
         return renderDetail(S.id);
       }
       case 'parse': {
@@ -1178,7 +1218,7 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('input', e => { if(e.target.id === 'q'){ S.q = e.target.value; drawBoardList(); } });
 // 입력 중인 내용이 있는지 표시(메모, 차량 등록·수정, 붙여넣기, 취소 사유, 예정일 변경)
-const DRAFT_IDS = ['memoBody', 'paste', 'cancelNote', 'cancelReason', 'dueDate', 'dueReason'];
+const DRAFT_IDS = ['memoBody', 'memoInternal', 'memoShared', 'paste', 'cancelNote', 'cancelReason', 'dueDate', 'dueReason'];
 const markDirty = e => { if(e.target.closest && (e.target.closest('#orderForm') || DRAFT_IDS.includes(e.target.id))) S.dirty = true; };
 document.addEventListener('input', markDirty);
 document.addEventListener('change', markDirty);
