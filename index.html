@@ -524,19 +524,73 @@ function orderForm(o, c, isEdit){
 }
 function renderNew(){ $app.innerHTML = orderForm(null, null, false); }
 
+// 카톡 붙여넣기 해석: 항목명 띄어쓰기·콜론 유무·다음 줄 값·다양한 표현을 허용하고,
+// 항목명이 없어도 전화번호·차량번호·보험사·주소는 생김새로 찾아낸다.
+const PASTE_LABELS = {
+  customer_name: ['고객명','고객이름','고객성함','고객','성함','성명','이름','차주','차주명','차주성함'],
+  phone: ['연락처','고객연락처','연락번호','전화','전화번호','고객전화번호','휴대폰','휴대폰번호','핸드폰','핸드폰번호','휴대전화','hp','h.p'],
+  car_model: ['차종','차명','차량명','차량모델','모델','차종명','차량종류'],
+  plate: ['차량번호','차번호','차번','번호판','차량넘버','차넘버'],
+  car: ['차량','차량정보'],
+  pickup_address: ['주소','주소지','픽업주소','픽업장소','픽업위치','픽업지','고객주소','출발지','위치','장소'],
+  delivery_address: ['딜리버리주소','딜리버리','배송주소','도착지','탁송지','반납주소','반납장소'],
+  insurer: ['보험사','보험회사','보험','담당보험사','보험사명'],
+  claim_no: ['접수번호','사고접수번호','보험접수번호','사고번호','접수','보험접수','사고접수','접수여부']
+};
+const PASTE_RE = Object.entries(PASTE_LABELS).flatMap(([field, labels]) => labels.map(l => ({
+  field, len: l.length,
+  re: new RegExp('^' + [...l].map(ch => ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s*') + '(?=$|[^\\p{L}])', 'iu')
+})));
+const PLATE_RE = /(?:(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)\s?)?(?<!\d)\d{2,3}\s?[가-힣]\s?\d{4}(?!\d)/;
+const PHONE_RE = /01[016789][\s.\-]?\d{3,4}[\s.\-]?\d{4}(?!\d)/;
+const ADDR_RE = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|충청|전북|전남|전라|경북|경남|경상|제주)|[가-힣]+(시|군|구)\s+[가-힣0-9]+(로|길|동|읍|면|리)(\s|\d|$)/;
+const INSURER_ALIAS = [['삼성','삼성화재'],['현대','현대해상'],['DB','DB손해보험'],['디비','DB손해보험'],['동부','DB손해보험'],['KB','KB손해보험'],['케이비','KB손해보험'],['메리츠','메리츠화재'],['한화','한화손해보험'],['롯데','롯데손해보험'],['흥국','흥국화재'],['MG','MG손해보험'],['새마을','MG손해보험'],['AXA','AXA손해보험'],['악사','AXA손해보험'],['하나','하나손해보험'],['캐롯','캐롯손해보험']];
+function matchInsurer(s, strict){
+  if(!s) return '';
+  const full = INSURERS.find(x => s.replace(/\s/g,'').toUpperCase().includes(x.toUpperCase()));
+  if(full) return full;
+  for(const [a, name] of INSURER_ALIAS){
+    const re = new RegExp(a + (strict ? '\\s*(화재|해상|손보|손해|보험|다이렉트)' : ''), 'i');
+    if(re.test(s)) return name;
+  }
+  return '';
+}
 function parsePaste(t){
-  const get = keys => { for(const k of keys){ const m = t.match(new RegExp(k + '\\s*[:：]\\s*(.*)')); if(m && m[1].trim()) return m[1].trim(); } return ''; };
-  const claimRaw = get(['접수번호','사고접수번호']);
-  const unclaimed = !claimRaw || /안\s*함|안\s*한|미접수|아직|없음/.test(claimRaw);
-  const ins = get(['보험사']);
-  const insMatch = INSURERS.find(x => ins && (x.includes(ins) || ins.includes(x.slice(0,2))));
+  const lines = String(t || '').replace(/\r/g, '').split(/\n|\s[\/|]\s/)
+    .map(l => l.replace(/^[^\p{L}\p{N}]+/u, '').replace(/^\d{1,2}[.)]\s*/, '').replace(/^[^\p{L}\p{N}]+/u, '').trim());
+  const labelOf = line => { let best = null; for(const x of PASTE_RE){ const m = line.match(x.re); if(m && (!best || m[0].length > best.n)) best = { field: x.field, n: m[0].length }; } return best; };
+  const clean = v => v.replace(/^[\s:：=\-–—>)\]】』」.]+/, '').trim();
+  const r = {}, used = new Set();
+  lines.forEach((line, i) => {
+    if(!line || used.has(i)) return;
+    const lb = labelOf(line); if(!lb) return;
+    used.add(i);
+    let v = clean(line.slice(lb.n));
+    if(!v){ const j = lines.findIndex((l, k) => k > i && l); if(j > i && !labelOf(lines[j])){ v = lines[j]; used.add(j); } }
+    if(v && !r[lb.field]) r[lb.field] = v;
+  });
+  // '차량 : …' 은 번호판 모양이면 차량번호, 아니면 차종
+  if(r.car){ const pm = r.car.match(PLATE_RE); if(pm){ r.plate = r.plate || pm[0]; const rest = r.car.replace(pm[0], '').replace(/[\s,()/]+/g, ' ').trim(); if(rest) r.car_model = r.car_model || rest; } else r.car_model = r.car_model || r.car; }
+  // 항목명이 없을 때: 생김새로 찾기
+  const free = lines.filter((l, i) => l && !used.has(i)).join('\n');
+  const all = lines.join('\n');
+  if(!r.phone){ const m = free.match(PHONE_RE) || all.match(PHONE_RE); if(m) r.phone = m[0]; }
+  if(!r.plate){ const m = free.match(PLATE_RE); if(m) r.plate = m[0]; }
+  if(!r.insurer){ const ins = matchInsurer(free, true); if(ins) r.insurer = ins; }
+  if(!r.pickup_address){ const a = lines.find((l, i) => l && !used.has(i) && ADDR_RE.test(l) && !PHONE_RE.test(l)); if(a) r.pickup_address = a; }
+  const claimRaw = r.claim_no || '';
+  const unclaimed = !claimRaw || /안\s*함|안\s*한|안\s*됨|미접수|아직|없음|예정|^x$|^-$/i.test(claimRaw);
+  const ins = r.insurer || '';
+  const plate = (r.plate || '').match(PLATE_RE);
+  const delivery = (r.delivery_address || '').trim();
   return {
-    customer_name: get(['고객명','성함','이름']),
-    phone: normPhone(get(['연락처','전화번호','휴대폰','핸드폰'])),
-    car_model: get(['차종']),
-    plate: get(['차량번호']),
-    pickup_address: get(['주소','픽업주소','픽업 주소']),
-    insurer: insMatch || ins,
+    customer_name: (r.customer_name || '').replace(/\s*(고객)?\s*님$/, '').trim(),
+    phone: normPhone(r.phone || ''),
+    car_model: r.car_model || '',
+    plate: plate ? plate[0].replace(/\s/g, '') : (r.plate || ''),
+    pickup_address: r.pickup_address || '',
+    delivery_address: delivery && !/동일|같음|상동|위와/.test(delivery) && delivery !== r.pickup_address ? delivery : '',
+    insurer: matchInsurer(ins, false) || ins,
     claim_no: unclaimed ? '' : claimRaw,
     claim_status: unclaimed ? '미접수' : '접수완료'
   };
@@ -658,6 +712,7 @@ document.addEventListener('click', async e => {
         const f = document.getElementById('orderForm');
         let n = 0;
         Object.entries(p).forEach(([k, v]) => { if(v && f.elements[k]){ f.elements[k].value = v; n++; } });
+        if(p.delivery_address) f.elements.same.checked = false;
         return toast(n ? `${n}개 항목을 채웠습니다. 확인 후 저장하세요` : '읽을 수 있는 항목이 없습니다');
       }
       case 'saveNew': {
