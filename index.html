@@ -131,6 +131,7 @@ const DEFAULT_DAYS = 3; // 입고일 + 3일 = 기본 출고 예정일
 const DELAY_REASONS = ['부품 대기','보험사 승인 대기','추가 손상 발견','고객 요청','기타'];
 const ACCIDENT_TYPES = ['자차','대물','일반수리'];
 const NO_INSURANCE = '일반수리'; // 보험을 쓰지 않으므로 '보험 미접수' 경고 제외
+const accType = v => v === '피해' ? '대물' : v; // 예전 '피해'는 '대물'과 같은 뜻
 const INSURERS = ['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','한화손해보험','롯데손해보험','흥국화재','MG손해보험','AXA손해보험','하나손해보험','캐롯손해보험'];
 const SOURCES = ['네이버 플레이스','네이버 블로그','카카오 채널','전화','지인 소개','기타'];
 const DOW = '일월화수목금토';
@@ -525,7 +526,7 @@ async function renderDetail(id){
   <div class="card"><h2>수리 정보</h2>
     <dl class="kv">
       <dt>보험사</dt><dd>${esc(o.insurer || '-')}</dd>
-      <dt>사고 유형</dt><dd>${esc(o.accident_type || '-')}</dd>
+      <dt>사고 유형</dt><dd>${esc(accType(o.accident_type) || '-')}</dd>
       <dt>접수번호</dt><dd>${esc(o.claim_no || '-')} <span class="badge ${o.claim_status==='미접수'?'b-warn':'b-ok'}">${esc(o.claim_status)}</span></dd>
       <dt>렌트</dt><dd>${o.need_rental ? '필요' : '불필요'}</dd>
       <dt>픽업 희망</dt><dd>${fmtDT(o.pickup_at)}</dd>
@@ -646,7 +647,7 @@ function orderForm(o, c, isEdit){
       <label class="f">차량번호 *<input name="plate" value="${esc(o.plate)}" required></label>
       <label class="f">차종<input name="car_model" value="${esc(o.car_model)}"></label>
       <label class="f">보험사<input name="insurer" list="insurers" value="${esc(o.insurer)}"></label>
-      <label class="f">사고 유형<select name="accident_type"><option value="">선택</option>${opt(o.accident_type && !ACCIDENT_TYPES.includes(o.accident_type) ? [...ACCIDENT_TYPES, o.accident_type] : ACCIDENT_TYPES, o.accident_type)}</select></label>
+      <label class="f">사고 유형<select name="accident_type"><option value="">선택</option>${opt(accType(o.accident_type) && !ACCIDENT_TYPES.includes(accType(o.accident_type)) ? [...ACCIDENT_TYPES, o.accident_type] : ACCIDENT_TYPES, accType(o.accident_type))}</select></label>
       <label class="f">보험 접수번호<input name="claim_no" value="${esc(o.claim_no)}"></label>
       <label class="f">접수 상태<select name="claim_status">${opt(['미접수','접수완료'], o.claim_status || '미접수')}</select></label>
     </div>
