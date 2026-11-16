@@ -151,9 +151,9 @@ const SOURCES = ['네이버 플레이스','네이버 블로그','카카오 채�
 const DOW = '일월화수목금토';
 const CANCEL_REASONS = ['고객 취소','전손 처리','다른 곳에서 수리','중복 등록','테스트','기타'];
 // 입고 대기: 본사 누구나 / 입고·수리 중: 대표만 / 출고 이후: 불가
-const canCancel = o => S.hasCancel && isHQ() && !o.canceled_at && !o.delivered_at && (o.stage === -1 || (isAdmin() && o.stage >= 0 && o.stage < LAST));
+const canCancel = o => isHQ() && !o.canceled_at && !o.delivered_at && (o.stage === -1 || (isAdmin() && o.stage >= 0 && o.stage < LAST));
 
-const S = { dirty:false, retryContact:null, statDays:14, hasCancel:false, cancelOpen:false, me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
+const S = { dirty:false, statDays:14, cancelOpen:false, me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
 const $app = document.getElementById('app');
 const $top = document.getElementById('top');
 
@@ -208,7 +208,7 @@ function go(view, id, opt){
 }
 // 앱 안의 ← 버튼: 이전 화면이 있으면 휴대폰 뒤로가기와 똑같이 동작
 // 첫 화면: 본사는 '오늘 할 일'(기능이 켜져 있을 때), 공업사는 작업 목록
-const homeView = () => (isHQ() && S.hasOps) ? 'today' : 'list';
+const homeView = () => isHQ() ? 'today' : 'list';
 function goBack(){ if(history.state && history.state.d > 0) history.back(); else go(homeView(), null, { replace: true }); }
 window.addEventListener('popstate', e => {
   if(!S.me) return;
@@ -284,18 +284,9 @@ async function loadMe(){
     if(!sh || !sh.active) S.me.active = false;
   }
   if(isHQ()) await loadShops();
-  // 접수 취소 칸이 DB에 있는지 확인(SQL 실행 전에는 취소 기능을 숨김)
-  const probe = await sb.from('repair_orders').select('canceled_at').limit(1);
-  S.hasCancel = !probe.error;
-  // 메모 내부/공유 구분 칸이 DB에 있는지 확인(SQL 실행 전에는 예전처럼 한 칸)
-  const mprobe = await sb.from('memos').select('visibility').limit(1);
-  S.hasMemoVis = !mprobe.error;
-  // 영업 담당자·고객 안내·공업사 확인 칸이 DB에 있는지(SQL 실행 전에는 숨김)
-  const oprobe = await sb.from('repair_orders').select('assignee_id').limit(1);
-  S.hasOps = !oprobe.error;
   if(isHQ()) await loadStaff();
 }
-const notCanceled = qy => S.hasCancel ? qy.is('canceled_at', null) : qy;
+const notCanceled = qy => qy.is('canceled_at', null);
 const isLive = o => !o.delivered_at && !o.canceled_at;
 async function loadShops(){ const { data } = await sb.from('shops').select('*').order('name'); S.shops = data || []; }
 
@@ -303,7 +294,7 @@ async function loadShops(){ const { data } = await sb.from('shops').select('*').
 function renderTop(){
   $top.hidden = false;
   const nav = isHQ() ? `<nav class="nav" aria-label="메뉴">
-      ${S.hasOps ? `<button data-act="nav" data-view="today" class="${S.view==='today'?'on':''}">오늘 할 일</button>` : ''}
+      <button data-act="nav" data-view="today" class="${S.view==='today'?'on':''}">오늘 할 일</button>
       <button data-act="nav" data-view="list" class="${S.view==='list'?'on':''}">현황</button>
       <button data-act="nav" data-view="new" class="${S.view==='new'?'on':''}">차량 등록</button>
       <button data-act="nav" data-view="stats" class="${S.view==='stats'?'on':''}">입력률</button>
@@ -324,7 +315,7 @@ function render(){
   if(S.view === 'new' && isHQ()) return renderNew();
   if(S.view === 'admin' && isAdmin()) return renderAdmin();
   if(S.view === 'stats' && isHQ()) return renderStats();
-  if(S.view === 'today' && isHQ() && S.hasOps) return renderToday();
+  if(S.view === 'today' && isHQ()) return renderToday();
   return isHQ() ? renderBoard() : renderShopList();
 }
 function renderPending(){
@@ -339,7 +330,7 @@ async function renderBoard(quiet){
   const since = new Date(Date.now() - 30*86400000).toISOString();
   const { data, error } = await sb.from('repair_orders')
     .select('*, shops(name), order_contacts(customer_name)')
-    .or(S.hasCancel ? `and(delivered_at.is.null,canceled_at.is.null),delivered_at.gt."${since}",canceled_at.gt."${since}"` : `delivered_at.is.null,delivered_at.gt."${since}"`)
+    .or(`and(delivered_at.is.null,canceled_at.is.null),delivered_at.gt."${since}",canceled_at.gt."${since}"`)
     .order('updated_at', { ascending: false });
   if(error) return fail(error);
   if(S.view !== 'list') return;
@@ -359,7 +350,7 @@ async function renderBoard(quiet){
   $app.innerHTML = `
     <div class="between" style="margin-bottom:12px"><div><div class="sub">카컨 본사</div><div class="h1">수리 진행 현황</div></div>
       <button class="btn sm" data-act="refresh">새로고침</button></div>
-    <div class="kpis">${kpi('all','진행 중')}${kpi('check','확인 필요','w')}${kpi('out','오늘 출고','g')}${kpi('wait','딜리버리 대기')}${kpi('done','완료(30일)')}${S.hasCancel ? kpi('canceled','취소(30일)') : ''}</div>
+    <div class="kpis">${kpi('all','진행 중')}${kpi('check','확인 필요','w')}${kpi('out','오늘 출고','g')}${kpi('wait','딜리버리 대기')}${kpi('done','완료(30일)')}${kpi('canceled','취소(30일)')}</div>
     <input class="in" id="q" placeholder="차량번호 · 고객명 · 공업사 검색" value="${esc(S.q)}" style="margin-bottom:12px">
     <div id="boardList"></div>`;
   drawBoardList();
@@ -385,9 +376,9 @@ async function loadStaff(){
 }
 const staffName = id => { const p = (S.staff || []).find(s => s.id === id); return p ? (p.name || '이름 없음') : ''; };
 // 사진·예정일 변경(또는 접수) 뒤 아직 [안내 완료]를 안 눌렀으면 '안내 필요'
-const needNotify = o => S.hasOps && isLive(o) && !!o.customer_event_at && (!o.customer_notified_at || o.customer_event_at > o.customer_notified_at);
+const needNotify = o => isLive(o) && !!o.customer_event_at && (!o.customer_notified_at || o.customer_event_at > o.customer_notified_at);
 // 공업사에 배정됐는데 공업사가 아직 차량을 열어 보지 않음
-const unseenByShop = o => S.hasOps && isLive(o) && !!o.shop_id && !o.shop_seen_at && o.stage === -1;
+const unseenByShop = o => isLive(o) && !!o.shop_id && !o.shop_seen_at && o.stage === -1;
 const opsBadges = o => !isHQ() ? '' : [
   unseenByShop(o) ? '<span class="badge b-warn">공업사 미확인</span>' : '',
   needNotify(o) ? '<span class="badge b-info">안내 필요</span>' : ''
@@ -396,7 +387,7 @@ const opsBadges = o => !isHQ() ? '' : [
 function orderCard(o, hq, why){
   const pct = Math.round((o.stage + 1) / STAGES.length * 100);
   const c = contactOf(o);
-  const meta = hq ? [o.car_model, c.customer_name, o.shops ? o.shops.name : '공업사 미배정', S.hasOps && o.assignee_id ? '담당 ' + staffName(o.assignee_id) : ''] : [o.car_model];
+  const meta = hq ? [o.car_model, c.customer_name, o.shops ? o.shops.name : '공업사 미배정', o.assignee_id ? '담당 ' + staffName(o.assignee_id) : ''] : [o.car_model];
   const tail = o.stage === LAST
     ? `출고 ${fmtDT(o.released_at)} · 수리 ${repairDays(o)}일`
     : (o.stage === -1 && o.pickup_at ? `픽업 ${fmtDT(o.pickup_at)}` : `출고 예정 ${fmtDay(o.due_date)}`);
@@ -569,8 +560,8 @@ async function renderDetail(id){
   const hq = isHQ();
 
   // 공업사가 차량을 처음 열면 '배정 확인'을 자동 기록(공업사 버튼 없음)
-  if(!hq && S.hasOps && !o.shop_seen_at) sb.rpc('mark_seen', { p_order: id }).then(() => {}, () => {});
-  if(S.editing && hq){ $app.innerHTML = orderForm(o, (S.retryContact && S.retryContact.id === id) ? S.retryContact.contact : c, true); if(S.retryContact && S.retryContact.id === id) S.dirty = true; return; }
+  if(!hq && !o.shop_seen_at) sb.rpc('mark_seen', { p_order: id }).then(() => {}, () => {});
+  if(S.editing && hq){ $app.innerHTML = orderForm(o, c, true); return; }
 
   const shopNote = !hq;
   const phoneHtml = c.phone
@@ -593,7 +584,7 @@ async function renderDetail(id){
     ${hq ? '<button class="btn sm" data-act="edit">정보 수정</button>' : ''}
   </div>
   <div style="margin:0 0 12px 4px">${badges(o)} ${hq ? opsBadges(o) : ''}</div>
-  ${hq && S.hasOps ? `<div class="card" style="padding:12px 16px"><label class="row" style="gap:8px;align-items:center;margin:0"><b style="font-size:14px">영업 담당</b>
+  ${hq ? `<div class="card" style="padding:12px 16px"><label class="row" style="gap:8px;align-items:center;margin:0"><b style="font-size:14px">영업 담당</b>
     <select id="assigneeSel" class="in" style="max-width:220px;height:40px">
       <option value="">담당자 없음</option>${(S.staff || []).map(p => `<option value="${esc(p.id)}" ${p.id === o.assignee_id ? 'selected' : ''}>${esc(p.name || '이름 없음')}${p.id === S.me.id ? ' (나)' : ''}</option>`).join('')}
     </select></label></div>` : ''}
@@ -608,14 +599,14 @@ async function renderDetail(id){
     <textarea class="in" id="custMsg" rows="6" style="min-height:150px">${esc(customerMsg(o, c))}</textarea>
     <div class="row" style="margin-top:8px"><button class="btn sm pri" data-act="copyMsg">문구 복사</button>
       <span class="sub" style="font-size:13px">필요하면 고친 뒤 복사해서 카톡·문자로 보내세요</span></div>
-    ${S.hasOps ? `<div class="ops-line" style="border-top:1px solid var(--line);padding-top:10px">
+    <div class="ops-line" style="border-top:1px solid var(--line);padding-top:10px">
       ${needNotify(o)
         ? `<span class="badge b-info">📞 안내 필요</span><span>${esc(o.customer_event || '진행')} · ${fmtDT(o.customer_event_at)}</span>
            <button class="btn sm green" data-act="notifyDone">고객에게 안내 완료</button>`
         : (o.customer_notified_at
           ? `<span class="badge b-ok">✅ 안내 완료</span><span class="sub">${esc(staffName(o.customer_notified_by) || '')} · ${fmtDT(o.customer_notified_at)}</span>`
           : '<span class="sub">아직 안내할 내용이 없습니다</span>')}
-    </div>` : ''}</div>` : ''}
+    </div></div>` : ''}
 
   <div class="card"><h2>고객</h2>
     <dl class="kv">
@@ -636,7 +627,7 @@ async function renderDetail(id){
       ${hq ? `<dt>유입 경로</dt><dd>${esc(o.source || '-')}</dd>` : ''}
       <dt>입고</dt><dd>${fmtDT(o.intake_at)}</dd>
       <dt>출고 예정</dt><dd>${fmtDay(o.due_date)}${o.delay_reason ? ` <span class="sub">(${esc(o.delay_reason)})</span>` : ''}</dd>
-      ${hq && S.hasOps && o.shop_id ? `<dt>공업사 확인</dt><dd>${o.shop_seen_at ? `✅ ${fmtDT(o.shop_seen_at)}` : '<span style="color:var(--warn);font-weight:700">⏳ 아직 차량을 열어 보지 않음</span>'}</dd>` : ''}
+      ${hq && o.shop_id ? `<dt>공업사 확인</dt><dd>${o.shop_seen_at ? `✅ ${fmtDT(o.shop_seen_at)}` : '<span style="color:var(--warn);font-weight:700">⏳ 아직 차량을 열어 보지 않음</span>'}</dd>` : ''}
     </dl>
     ${hq && o.stage < LAST && !o.canceled_at ? `<div class="row" style="margin-top:12px;gap:8px">
       <button class="btn sm" data-act="advance">${ICON_CAM} ${esc(NEXT[o.stage + 1])} 대신 올리기</button>
@@ -671,32 +662,15 @@ async function renderDetail(id){
     ${o.stage === LAST && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
   </div></div>`;
   let restoredMemo = false;
-  Object.entries(memoDraftsForView(keepMemo, hq, S.hasMemoVis)).forEach(([k, v]) => {
-    const m = document.getElementById(k);
-    if(m){ m.value = v; restoredMemo = true; }
-  });
+  Object.entries(keepMemo).forEach(([k, v]) => { const m = document.getElementById(k); if(m){ m.value = v; restoredMemo = true; } });
   // 다시 그리면 남는 입력은 메모뿐이므로 그것만 기준으로 표시
   S.dirty = restoredMemo;
-}
-// SQL 적용 전 한 칸에서 작성한 초안도 새 화면의 올바른 공개 범위로 옮긴다.
-function memoDraftsForView(drafts, hq, split){
-  const mapped = { ...drafts };
-  if(split && mapped.memoBody){
-    const target = hq ? 'memoInternal' : 'memoShared';
-    mapped[target] = [mapped[target], mapped.memoBody].filter(Boolean).join('\n');
-    delete mapped.memoBody;
-  }
-  return mapped;
 }
 // 메모: 본사는 '본사 내부'와 '공업사 공유' 두 칸, 공업사는 공유 메모만(DB 권한으로도 제한)
 function memoCards(o, memos, hq){
   const ta = (id, ph) => `<textarea class="in memo-in" id="${id}" data-oid="${esc(o.id)}" placeholder="${ph}"></textarea>`;
-  const item = m => `<div class="memo">${esc(m.body)}<small>${esc(m.author_name || '')} · ${fmtDT(m.created_at)}${hq && S.hasMemoVis
+  const item = m => `<div class="memo">${esc(m.body)}<small>${esc(m.author_name || '')} · ${fmtDT(m.created_at)}${hq
     ? ` · <button class="linkbtn" data-act="memoVis" data-mid="${esc(m.id)}" data-v="${m.visibility === 'shared' ? 'internal' : 'shared'}">${m.visibility === 'shared' ? '내부 메모로 전환' : '공업사에 공유'}</button>` : ''}</small></div>`;
-  if(!S.hasMemoVis) return `<div class="card"><h2>메모 · 고객 연락 기록</h2>
-    ${ta('memoBody', '예: 고객 통화, 출고 시간 14시로 조율')}
-    <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo">메모 저장</button></div>
-    ${memos.map(item).join('')}</div>`;
   if(!hq) return `<div class="card"><h2>본사와 공유하는 메모</h2>
     ${ta('memoShared', '예: 부품 입고 지연, 출고 시간 문의')}
     <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo" data-v="shared">메모 저장</button></div>
@@ -993,7 +967,6 @@ const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null
 const lsSet = (k, v) => { try{ localStorage.setItem(k, v); }catch(e){} };
 const bellOn = () => lsGet('carcun_bell') === '1';
 const LIVE_COLS = 'id, plate, car_model, stage, shop_id, delivered_at, due_date, delay_reason';
-const STAGE_ALERT = ['입고 사진 등록', '중간 사진 등록', '출고 완료'];
 
 function audioCtx(){
   try{
@@ -1063,7 +1036,6 @@ function handleRow(n){
   } else if(prev && n.stage > prev.stage && n.stage >= 0){
     const sh = shopNameOf(n.shop_id);
     if(n.stage === LAST) notify('출고 완료', `${n.plate}${sh ? ' · ' + sh : ''} · 딜리버리 안내 필요`, n.id, true);
-    else notify(STAGE_ALERT[n.stage], `${n.plate}${sh ? ' · ' + sh : ''}`, n.id, false);
   } else if(prev && prev.due_date && n.due_date && prev.due_date !== n.due_date && n.stage < LAST){
     const sh = shopNameOf(n.shop_id);
     notify('출고 예정일 변경', `${n.plate}${sh ? ' · ' + sh : ''} · ${fmtDay(prev.due_date)} → ${fmtDay(n.due_date)}${n.delay_reason ? ' · ' + n.delay_reason : ''} · 고객 안내 필요`, n.id, true);
@@ -1096,7 +1068,7 @@ async function resyncLive(){
   const gone = [...LIVE.known.keys()].filter(id => !ids.has(id));
   if(gone.length){
     changed = true;
-    const { data: rows, error: goneErr } = await sb.from('repair_orders').select(LIVE_COLS + (S.hasCancel ? ', canceled_at' : '')).in('id', gone);
+    const { data: rows, error: goneErr } = await sb.from('repair_orders').select(LIVE_COLS + ', canceled_at').in('id', gone);
     // 조회에 실패하면 기억 목록을 그대로 두고 다음 확인 때 다시 시도
     if(!goneErr){
       (rows || []).forEach(o => handleRow(o));
@@ -1104,15 +1076,6 @@ async function resyncLive(){
     }
   }
   if(changed) liveRefresh(null);
-}
-// 앱을 켜 둔 채 SQL이 실행된 경우: 1분 안에 새 기능(접수 취소, 메모 분리)을 감지해 화면을 바꿈
-async function reprobeFeatures(){
-  if(!S.me || (S.hasCancel && S.hasMemoVis && S.hasOps)) return;
-  let changed = false;
-  if(!S.hasCancel){ const r = await sb.from('repair_orders').select('canceled_at').limit(1); if(!r.error){ S.hasCancel = true; changed = true; } }
-  if(!S.hasMemoVis){ const r = await sb.from('memos').select('visibility').limit(1); if(!r.error){ S.hasMemoVis = true; changed = true; } }
-  if(!S.hasOps){ const r = await sb.from('repair_orders').select('assignee_id').limit(1); if(!r.error){ S.hasOps = true; if(isHQ()) await loadStaff(); changed = true; } }
-  if(changed && !S.dirty && document.getElementById('busy').style.display !== 'flex') render();
 }
 // 1분마다 내 권한이 바뀌었는지 확인(대표가 역할·소속·사용 여부를 바꾼 경우)
 async function checkMyRole(){
@@ -1244,15 +1207,14 @@ document.addEventListener('click', async e => {
       }
       case 'addMemo': {
         const vis = t.dataset.v || '';
-        const el = document.getElementById(vis === 'shared' ? 'memoShared' : vis === 'internal' ? 'memoInternal' : 'memoBody');
+        const el = document.getElementById(vis === 'shared' ? 'memoShared' : 'memoInternal');
         const body = el.value.trim();
         if(!body) return toast('메모 내용을 입력하세요');
         // 공유 메모에 전화번호가 있으면 한 번 더 확인
         if(vis === 'shared' && isHQ() && PHONE_RE.test(body) && !confirm('공유 메모에 전화번호가 있습니다.\n공업사에 그대로 보입니다. 저장할까요?\n(고객 연락처는 내부 메모에 쓰는 것을 권합니다)')) return;
         busy(true);
         const row = { order_id: S.cur.id, body, created_by: S.me.id, author_name: S.me.name || S.me.email };
-        // 예전 한 칸 화면(vis 없음)에서 써도 공업사는 '공유', 본사는 '내부'로 저장
-        if(S.hasMemoVis) row.visibility = vis === 'shared' || (!vis && !isHQ()) ? 'shared' : 'internal';
+        row.visibility = vis === 'shared' ? 'shared' : 'internal';
         const { error } = await sb.from('memos').insert(row);
         busy(false); if(error) throw error;
         el.value = ''; S.dirty = false;
@@ -1281,24 +1243,9 @@ document.addEventListener('click', async e => {
         const d = readForm(); const msg = validate(d); if(msg) return toast(msg);
         busy(true, '등록 중…');
         // 차량과 연락처를 DB 함수 하나로 한 번에 저장(반쪽 저장 없음)
-        if(S.hasOps){
-          const { data: newId, error: ce } = await sb.rpc('create_order', { p_order: d.order, p_contact: d.contact });
-          if(!ce){ busy(false); S.dirty = false; toast('등록했습니다. 공업사 화면에 바로 표시됩니다'); return go('detail', newId, { replace: true }); }
-          if(ce.code !== 'PGRST202') throw ce; // 함수가 없을 때만 예전 방식으로
-        }
-        const { data: row, error } = await sb.from('repair_orders').insert({ ...d.order, created_by: S.me.id }).select('id').single();
-        if(error) throw error;
-        // 연락처 저장 실패 시 한 번 더 시도. 그래도 실패하면 입력값을 살려 수정 화면으로 보냄
-        let r2 = await sb.from('order_contacts').insert({ order_id: row.id, ...d.contact });
-        if(r2.error) r2 = await sb.from('order_contacts').upsert({ order_id: row.id, ...d.contact });
-        busy(false); S.dirty = false;
-        if(r2.error){
-          console.error(r2.error);
-          S.retryContact = { id: row.id, contact: d.contact };
-          alert('⚠️ 차량은 등록됐지만 고객 연락처 저장에 실패했습니다.\n\n다음 화면에서 [수정 저장]을 눌러 연락처를 다시 저장해 주세요.\n저장 전까지 공업사에는 연락처가 보이지 않습니다.');
-          return go('detail', row.id, { replace: true, edit: true, force: true });
-        }
-        toast('등록했습니다. 공업사 화면에 바로 표시됩니다'); return go('detail', row.id, { replace: true });
+        const { data: newId, error } = await sb.rpc('create_order', { p_order: d.order, p_contact: d.contact });
+        busy(false); if(error) throw error;
+        S.dirty = false; toast('등록했습니다. 공업사 화면에 바로 표시됩니다'); return go('detail', newId, { replace: true });
       }
       case 'edit': return go('detail', S.id, { edit: true });
       case 'cancelEdit': return (history.state && history.state.edit && history.state.d > 0) ? history.back() : go('detail', S.id, { replace: true });
@@ -1312,7 +1259,6 @@ document.addEventListener('click', async e => {
         const r2 = await sb.from('order_contacts').upsert({ order_id: S.cur.id, ...d.contact });
         busy(false); if(r2.error) throw r2.error;
         toast('수정했습니다'); S.dirty = false;
-        if(S.retryContact && S.retryContact.id === S.cur.id){ S.retryContact = null; return go('detail', S.cur.id, { replace: true }); }
         return (history.state && history.state.edit && history.state.d > 0) ? history.back() : go('detail', S.id, { replace: true });
       }
       case 'addShop': {
@@ -1350,7 +1296,7 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('input', e => { if(e.target.id === 'q'){ S.q = e.target.value; drawBoardList(); } });
 // 입력 중인 내용이 있는지 표시(메모, 차량 등록·수정, 붙여넣기, 취소 사유, 예정일 변경)
-const DRAFT_IDS = ['memoBody', 'memoInternal', 'memoShared', 'paste', 'cancelNote', 'cancelReason', 'dueDate', 'dueReason'];
+const DRAFT_IDS = ['memoInternal', 'memoShared', 'paste', 'cancelNote', 'cancelReason', 'dueDate', 'dueReason'];
 const markDirty = e => { if(e.target.closest && (e.target.closest('#orderForm') || DRAFT_IDS.includes(e.target.id))) S.dirty = true; };
 document.addEventListener('input', markDirty);
 // 영업 담당자 변경(선택하면 바로 저장, 수정 이력은 DB가 자동 기록)
@@ -1383,7 +1329,7 @@ setInterval(async () => {
 // + 1분마다 변경 확인(실시간 연결이 끊겨도 늦어도 1분 안에 알림)
 setInterval(() => {
   if(!S.me || document.visibilityState !== 'visible') return;
-  resyncLive(); checkMyRole(); reprobeFeatures();
+  resyncLive(); checkMyRole();
   if(S.view === 'today' && isHQ()){ pollWarnings(); if(!S.dirty) renderToday(true); return; }
   if(S.view !== 'list'){ if(isHQ()) pollWarnings(); return; }
   if(document.activeElement && document.activeElement.id === 'q') return;
