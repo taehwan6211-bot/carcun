@@ -139,7 +139,7 @@ const CANCEL_REASONS = ['고객 취소','전손 처리','다른 곳에서 수리
 // 입고 대기: 본사 누구나 / 입고·수리 중: 대표만 / 출고 이후: 불가
 const canCancel = o => S.hasCancel && isHQ() && !o.canceled_at && !o.delivered_at && (o.stage === -1 || (isAdmin() && o.stage >= 0 && o.stage < LAST));
 
-const S = { statDays:14, hasCancel:false, cancelOpen:false, me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
+const S = { dirty:false, retryContact:null, statDays:14, hasCancel:false, cancelOpen:false, me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
 const $app = document.getElementById('app');
 const $top = document.getElementById('top');
 
@@ -174,8 +174,12 @@ function busy(on, msg){ document.getElementById('busyMsg').textContent = msg || 
 function fail(e){ busy(false); console.error(e); toast((e && (e.message || e.error_description)) || '오류가 발생했습니다'); }
 // 화면 이동 + 휴대폰 뒤로가기 기록
 // opt.replace: 기록을 쌓지 않고 바꿈 / opt.fromHistory: 뒤로가기로 온 것 / opt.edit: 수정 화면
+// 저장하지 않은 입력이 있으면 나가기 전에 확인
+function leaveOk(){ return !S.dirty || confirm('저장하지 않은 내용이 있습니다.\n이 화면을 나가면 입력한 내용이 사라집니다. 나갈까요?'); }
 function go(view, id, opt){
   opt = opt || {};
+  if(!opt.fromHistory && !opt.force && !leaveOk()) return false;
+  S.dirty = false;
   S.view = view; S.id = id || null; S.editing = !!opt.edit; S.dueOpen = false; S.cancelOpen = false;
   if(!opt.fromHistory){
     const cur = history.state || {};
@@ -195,6 +199,8 @@ window.addEventListener('popstate', e => {
   const st = e.state || { view: 'list' };
   // 사진을 올리는 중에는 화면을 옮기지 않음
   if(document.getElementById('busy').style.display === 'flex'){ try{ history.pushState({ view: S.view, id: S.id, edit: S.editing, d: (st.d || 0) + 1 }, ''); }catch(err){} return; }
+  // 저장 안 한 입력이 있는데 '머무르기'를 고르면 화면을 그대로 둠
+  if(S.dirty && !leaveOk()){ try{ history.pushState({ view: S.view, id: S.id, edit: S.editing, d: (st.d || 0) + 1 }, ''); }catch(err){} return; }
   if(st.root) toast('뒤로 버튼을 한 번 더 누르면 앱이 닫힙니다');
   go(st.view || 'list', st.id, { fromHistory: true, edit: st.edit });
 });
@@ -456,6 +462,9 @@ async function renderShopList(quiet){
 
 // ===================== 차량 상세 =====================
 async function renderDetail(id){
+  // 같은 차량 화면을 다시 그릴 때 쓰던 메모는 지우지 않고 유지
+  const memoEl = document.getElementById('memoBody');
+  const keepMemo = S.id === id && memoEl ? memoEl.value : '';
   $app.innerHTML = '<div class="empty">불러오는 중…</div>';
   const [ro, rl, rc, rm] = await Promise.all([
     sb.from('repair_orders').select('*, shops(name)').eq('id', id).maybeSingle(),
@@ -479,7 +488,7 @@ async function renderDetail(id){
   S.cur = o; S.curContact = c;
   const hq = isHQ();
 
-  if(S.editing && hq){ $app.innerHTML = orderForm(o, c, true); return; }
+  if(S.editing && hq){ $app.innerHTML = orderForm(o, (S.retryContact && S.retryContact.id === id) ? S.retryContact.contact : c, true); if(S.retryContact && S.retryContact.id === id) S.dirty = true; return; }
 
   const shopNote = !hq;
   const phoneHtml = c.phone
@@ -566,6 +575,9 @@ async function renderDetail(id){
     ${o.stage === LAST && !o.delivered_at && hq ? `<button class="btn green big" data-act="deliver">고객 딜리버리 완료</button>` : ''}
     ${o.stage === LAST && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
   </div></div>`;
+  if(keepMemo){ const m = document.getElementById('memoBody'); if(m) m.value = keepMemo; }
+  // 다시 그리면 남는 입력은 메모뿐이므로 그것만 기준으로 표시
+  S.dirty = !!keepMemo;
 }
 function stepper(stage){
   return `<div class="steps">${STAGES.map((n,i) =>
@@ -656,7 +668,9 @@ function orderForm(o, c, isEdit){
     <div class="grid2">
       <label class="f">인증 공업사 *<select name="shop_id" required><option value="">선택</option>${S.shops.filter(s => s.active || s.id === o.shop_id).map(s => `<option value="${s.id}" ${s.id === o.shop_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
       <label class="f">픽업 희망 일시<input type="datetime-local" name="pickup_at" value="${esc(toLocalInput(o.pickup_at))}"></label>
-      <label class="f">출고 예정일<input type="date" name="due_date" value="${esc(o.due_date || '')}"></label>
+      ${isEdit
+        ? `<label class="f">출고 예정일<input type="date" value="${esc(o.due_date || '')}" disabled><span class="sub" style="font-size:12px">변경은 차량 화면의 [출고 예정일 변경]에서 (사유가 기록됩니다)</span></label>`
+        : `<label class="f">출고 예정일<input type="date" name="due_date" value="${esc(o.due_date || '')}"></label>`}
       <label class="f">유입 경로<select name="source"><option value="">선택</option>${opt(SOURCES, o.source)}</select></label>
     </div>
     <label class="chk"><input type="checkbox" name="need_rental" ${o.need_rental ? 'checked' : ''}> 렌트 필요</label>
@@ -742,7 +756,7 @@ function parsePaste(t){
 }
 function readForm(){
   const f = document.getElementById('orderForm');
-  const v = n => (f.elements[n].value || '').trim();
+  const v = n => ((f.elements[n] && f.elements[n].value) || '').trim();
   const same = f.elements.same.checked;
   return {
     order: {
@@ -933,15 +947,39 @@ async function resyncLive(){
   const ids = new Set(data.map(o => o.id));
   let changed = false;
   data.forEach(o => { const p = LIVE.known.get(o.id); if(!p || p.stage !== o.stage || p.shop_id !== o.shop_id || (p.due_date || null) !== (o.due_date || null)){ handleRow(o); changed = true; } });
-  [...LIVE.known.keys()].forEach(id => { if(!ids.has(id)){ LIVE.known.delete(id); changed = true; } });
+  // 목록에서 사라진 차량: 취소된 것인지 확인해서 '작업 중단' 알림을 놓치지 않게 함
+  const gone = [...LIVE.known.keys()].filter(id => !ids.has(id));
+  if(gone.length){
+    changed = true;
+    const { data: rows } = await sb.from('repair_orders').select(LIVE_COLS + (S.hasCancel ? ', canceled_at' : '')).in('id', gone);
+    (rows || []).forEach(o => handleRow(o));
+    gone.forEach(id => { if(LIVE.known) LIVE.known.delete(id); });
+  }
   if(changed) liveRefresh(null);
+}
+// 1분마다 내 권한이 바뀌었는지 확인(대표가 역할·소속·사용 여부를 바꾼 경우)
+async function checkMyRole(){
+  if(!S.me || S.me.role === 'pending') return;
+  const { data, error } = await sb.from('profiles').select('role, shop_id, active').eq('id', S.me.id).maybeSingle();
+  if(error) return;
+  let shopOn = true;
+  if(data && data.role === 'shop' && data.shop_id){
+    const r = await sb.from('shops').select('active').eq('id', data.shop_id).maybeSingle();
+    if(r.error) return;
+    shopOn = !!(r.data && r.data.active);
+  }
+  const now = data ? `${data.role}|${data.shop_id || ''}|${!!data.active && shopOn}` : 'pending||true';
+  const before = `${S.me.role}|${S.me.shop_id || ''}|${!!S.me.active}`;
+  if(now === before) return;
+  await loadMe(); if(!S.me) return;
+  toast('계정 권한이 변경되었습니다'); startLive(); go('list', null, { replace: true, force: true });
 }
 // 보고 있는 화면을 조용히 새로고침(입력 중이면 건드리지 않음)
 let liveT;
 function liveRefresh(id){
   clearTimeout(liveT);
   liveT = setTimeout(() => {
-    if(!S.me || document.visibilityState !== 'visible') return;
+    if(!S.me || document.visibilityState !== 'visible' || S.dirty) return;
     if(document.getElementById('busy').style.display === 'flex') return;
     const a = document.activeElement;
     const typing = a && (a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || (a.tagName === 'INPUT' && a.type !== 'checkbox'));
@@ -986,7 +1024,7 @@ document.addEventListener('click', async e => {
       case 'back': return goBack();
       case 'refresh': return render();
       case 'reload': await loadMe(); startLive(); return go('list');
-      case 'logout': stopLive(); await sb.auth.signOut(); S.me = null; return renderLogin();
+      case 'logout': if(!leaveOk()) return; S.dirty = false; stopLive(); await sb.auth.signOut(); S.me = null; return renderLogin();
       case 'bell': return toggleBell();
       case 'statDays': S.statDays = +t.dataset.v; return renderStats();
       case 'toggleCancel': S.cancelOpen = !S.cancelOpen; return renderDetail(S.id);
@@ -1045,9 +1083,11 @@ document.addEventListener('click', async e => {
         busy(true);
         const { error } = await sb.from('memos').insert({ order_id: S.cur.id, body, created_by: S.me.id, author_name: S.me.name || S.me.email });
         busy(false); if(error) throw error;
+        document.getElementById('memoBody').value = ''; S.dirty = false;
         return renderDetail(S.id);
       }
       case 'parse': {
+        S.dirty = true;
         const p = parsePaste(document.getElementById('paste').value || '');
         const f = document.getElementById('orderForm');
         let n = 0;
@@ -1060,20 +1100,31 @@ document.addEventListener('click', async e => {
         busy(true, '등록 중…');
         const { data: row, error } = await sb.from('repair_orders').insert({ ...d.order, created_by: S.me.id }).select('id').single();
         if(error) throw error;
-        const r2 = await sb.from('order_contacts').insert({ order_id: row.id, ...d.contact });
-        busy(false); if(r2.error) throw r2.error;
+        // 연락처 저장 실패 시 한 번 더 시도. 그래도 실패하면 입력값을 살려 수정 화면으로 보냄
+        let r2 = await sb.from('order_contacts').insert({ order_id: row.id, ...d.contact });
+        if(r2.error) r2 = await sb.from('order_contacts').upsert({ order_id: row.id, ...d.contact });
+        busy(false); S.dirty = false;
+        if(r2.error){
+          console.error(r2.error);
+          S.retryContact = { id: row.id, contact: d.contact };
+          alert('⚠️ 차량은 등록됐지만 고객 연락처 저장에 실패했습니다.\n\n다음 화면에서 [수정 저장]을 눌러 연락처를 다시 저장해 주세요.\n저장 전까지 공업사에는 연락처가 보이지 않습니다.');
+          return go('detail', row.id, { replace: true, edit: true, force: true });
+        }
         toast('등록했습니다. 공업사 화면에 바로 표시됩니다'); return go('detail', row.id, { replace: true });
       }
       case 'edit': return go('detail', S.id, { edit: true });
       case 'cancelEdit': return (history.state && history.state.edit && history.state.d > 0) ? history.back() : go('detail', S.id, { replace: true });
       case 'saveEdit': {
         const d = readForm(); const msg = validate(d); if(msg) return toast(msg);
-        busy(true, '저장 중…'); markMine(S.cur.id, { due_date: d.order.due_date, shop_id: d.order.shop_id });
-        const r1 = await sb.from('repair_orders').update({ ...d.order, updated_at: new Date().toISOString() }).eq('id', S.cur.id);
+        // 출고 예정일은 여기서 바꾸지 않음([출고 예정일 변경]에서 사유와 함께 기록)
+        const { due_date, ...orderPatch } = d.order;
+        busy(true, '저장 중…'); markMine(S.cur.id, { shop_id: d.order.shop_id });
+        const r1 = await sb.from('repair_orders').update({ ...orderPatch, updated_at: new Date().toISOString() }).eq('id', S.cur.id);
         if(r1.error) throw r1.error;
         const r2 = await sb.from('order_contacts').upsert({ order_id: S.cur.id, ...d.contact });
         busy(false); if(r2.error) throw r2.error;
-        toast('수정했습니다');
+        toast('수정했습니다'); S.dirty = false;
+        if(S.retryContact && S.retryContact.id === S.cur.id){ S.retryContact = null; return go('detail', S.cur.id, { replace: true }); }
         return (history.state && history.state.edit && history.state.d > 0) ? history.back() : go('detail', S.id, { replace: true });
       }
       case 'addShop': {
@@ -1102,12 +1153,21 @@ document.addEventListener('click', async e => {
           shop_id: role === 'shop' ? shop_id : null, active: tr.querySelector('.u-active').checked
         }).eq('id', id);
         if(error) throw error;
+        // 내 계정 권한을 바꿨으면 화면에 바로 반영
+        if(id === S.me.id){ await loadMe(); toast('내 권한이 변경되었습니다'); startLive(); return go('list', null, { replace: true, force: true }); }
         return toast('저장했습니다');
       }
     }
   }catch(err){ fail(err); }
 });
 document.addEventListener('input', e => { if(e.target.id === 'q'){ S.q = e.target.value; drawBoardList(); } });
+// 입력 중인 내용이 있는지 표시(메모, 차량 등록·수정, 붙여넣기, 취소 사유, 예정일 변경)
+const DRAFT_IDS = ['memoBody', 'paste', 'cancelNote', 'cancelReason', 'dueDate', 'dueReason'];
+const markDirty = e => { if(e.target.closest && (e.target.closest('#orderForm') || DRAFT_IDS.includes(e.target.id))) S.dirty = true; };
+document.addEventListener('input', markDirty);
+document.addEventListener('change', markDirty);
+// 새로고침·창 닫기 때도 확인
+window.addEventListener('beforeunload', e => { if(S.dirty){ e.preventDefault(); e.returnValue = ''; } });
 
 // 화면으로 돌아오면(휴대폰 잠금 해제 등) 놓친 변경을 바로 확인
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && S.me){ resyncLive(); liveRefresh(null); } });
@@ -1125,7 +1185,7 @@ setInterval(async () => {
 // + 1분마다 변경 확인(실시간 연결이 끊겨도 늦어도 1분 안에 알림)
 setInterval(() => {
   if(!S.me || document.visibilityState !== 'visible') return;
-  resyncLive();
+  resyncLive(); checkMyRole();
   if(S.view !== 'list'){ if(isHQ()) pollWarnings(); return; }
   if(document.activeElement && document.activeElement.id === 'q') return;
   isHQ() ? renderBoard(true) : renderShopList(true);
