@@ -576,9 +576,23 @@ async function renderDetail(id){
     ${o.stage === LAST && !o.delivered_at && hq ? `<button class="btn green big" data-act="deliver">고객 딜리버리 완료</button>` : ''}
     ${o.stage === LAST && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
   </div></div>`;
-  Object.entries(keepMemo).forEach(([k, v]) => { const m = document.getElementById(k); if(m) m.value = v; });
+  let restoredMemo = false;
+  Object.entries(memoDraftsForView(keepMemo, hq, S.hasMemoVis)).forEach(([k, v]) => {
+    const m = document.getElementById(k);
+    if(m){ m.value = v; restoredMemo = true; }
+  });
   // 다시 그리면 남는 입력은 메모뿐이므로 그것만 기준으로 표시
-  S.dirty = Object.keys(keepMemo).length > 0;
+  S.dirty = restoredMemo;
+}
+// SQL 적용 전 한 칸에서 작성한 초안도 새 화면의 올바른 공개 범위로 옮긴다.
+function memoDraftsForView(drafts, hq, split){
+  const mapped = { ...drafts };
+  if(split && mapped.memoBody){
+    const target = hq ? 'memoInternal' : 'memoShared';
+    mapped[target] = [mapped[target], mapped.memoBody].filter(Boolean).join('\n');
+    delete mapped.memoBody;
+  }
+  return mapped;
 }
 // 메모: 본사는 '본사 내부'와 '공업사 공유' 두 칸, 공업사는 공유 메모만(DB 권한으로도 제한)
 function memoCards(o, memos, hq){
