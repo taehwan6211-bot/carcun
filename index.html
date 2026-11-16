@@ -31,6 +31,7 @@ a{color:var(--brand)}
 /* 휴대폰: 상단 메뉴를 좁게(이름 숨김, 버튼 작게) */
 @media (max-width:640px){
   .who{display:none}
+  .bell-txt{display:none}
   .top-in{gap:4px;padding:8px 12px}
   .brand{font-size:16px}
   .top .btn.sm{height:34px;padding:0 8px;font-size:13px}
@@ -40,6 +41,11 @@ a{color:var(--brand)}
 .todo-sec h3{margin:0 0 8px;font-size:16px;display:flex;align-items:center;gap:8px}
 .todo-sec h3 .cnt{background:var(--bg);border-radius:999px;padding:1px 10px;font-size:14px}
 .todo-why{font-size:13px;font-weight:700;color:var(--warn)}
+details.more{margin-top:12px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--card)}
+details.more.flat{border:0;padding:0;margin:0;background:none}
+details.more.flat > summary{font-size:16px;color:var(--ink);font-weight:800}
+details.more > summary{cursor:pointer;font-weight:700;color:var(--muted);font-size:14px;list-style-position:inside}
+details.more[open] > summary{margin-bottom:6px}
 .ops-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;font-size:14px}
 .wrap{max-width:1080px;margin:0 auto;padding:16px 16px 120px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
@@ -139,8 +145,9 @@ const STAGES = ['입고','수리 중','출고'];
 const LAST = STAGES.length - 1;
 const STATUS = ['입고 완료','수리 중','출고 완료'];
 const NEXT = ['입고 사진','도장 전 사진','출고 사진'];
-const BTN = ['사진 찍고 입고 완료','중간 사진 등록 (판금 후 도장 전)','완성차 사진 찍고 출고 완료'];
-const DONE_TITLE = ['입고 완료','중간 사진 등록 완료','출고 완료'];
+const NEXT_GUIDE = ['입고 사진 · 입고할 때 차량 전체', '도장 전 사진 · 판금 끝나고 도장 들어가기 전', '출고 사진 · 수리 끝난 완성차'];
+const BTN = ['사진 찍고 입고 완료','도장 전 사진 등록 (판금 끝난 뒤)','완성차 사진 찍고 출고 완료'];
+const DONE_TITLE = ['입고 완료','도장 전 사진 등록 완료','출고 완료'];
 const DEFAULT_DAYS = 3; // 입고일 + 3일 = 기본 출고 예정일
 const DELAY_REASONS = ['부품 대기','보험사 승인 대기','추가 손상 발견','고객 요청','기타'];
 const ACCIDENT_TYPES = ['자차','대물','일반수리'];
@@ -179,7 +186,7 @@ function toLocalInput(ts){ if(!ts) return ''; const d = new Date(ts); return `${
 function normPhone(s){ const d = String(s||'').replace(/\D/g,''); if(d.length === 11) return d.replace(/(\d{3})(\d{4})(\d{4})/,'$1-$2-$3'); if(d.length === 10) return d.replace(/(\d{3})(\d{3})(\d{4})/,'$1-$2-$3'); return String(s||'').trim(); }
 const nextName = st => st >= LAST ? '' : NEXT[st + 1];
 const stageLabel = st => st < 0 ? '입고 대기' : STATUS[st];
-const photoLabel = l => l.kind === 'photo' ? '추가' : (l.stage === 1 ? '중간' : (STAGES[l.stage] || ''));
+const photoLabel = l => l.kind === 'photo' ? '추가' : (l.stage === 1 ? '도장 전' : (STAGES[l.stage] || ''));
 const contactOf = o => Array.isArray(o.order_contacts) ? (o.order_contacts[0] || {}) : (o.order_contacts || {});
 
 let toastT;
@@ -232,7 +239,7 @@ function flags(o){
     const late = o.pickup_at ? hoursSince(o.pickup_at) > 24 : hoursSince(o.created_at) > 48;
     f.push(late ? ['warn','입고 사진 없음'] : ['info','입고 대기']);
   }
-  if(o.stage === 0 && o.intake_at && hoursSince(o.intake_at) > 24) f.push(['warn','중간 사진 없음']);
+  if(o.stage === 0 && o.intake_at && hoursSince(o.intake_at) > 24) f.push(['warn','도장 전 사진 없음']);
   if(o.due_date && o.stage < LAST && o.due_date < todayStr()) f.push(['bad','출고 지연']);
   if(o.claim_status === '미접수' && o.accident_type !== NO_INSURANCE && hoursSince(o.created_at) > 24) f.push(['warn','보험 미접수']);
   return f;
@@ -297,13 +304,13 @@ function renderTop(){
       <button data-act="nav" data-view="today" class="${S.view==='today'?'on':''}">오늘 할 일</button>
       <button data-act="nav" data-view="list" class="${S.view==='list'?'on':''}">현황</button>
       <button data-act="nav" data-view="new" class="${S.view==='new'?'on':''}">차량 등록</button>
-      <button data-act="nav" data-view="stats" class="${S.view==='stats'?'on':''}">입력률</button>
+      ${isAdmin() ? `<button data-act="nav" data-view="stats" class="${S.view==='stats'?'on':''}">입력률</button>` : ''}
       ${isAdmin() ? `<button data-act="nav" data-view="admin" class="${S.view==='admin'?'on':''}">관리</button>` : ''}
     </nav>` : '';
   const where = S.me.role === 'shop' && S.me.shop ? S.me.shop.name : (S.me.role === 'admin' ? '대표' : S.me.role === 'staff' ? '본사' : '');
   $top.innerHTML = `<div class="top-in"><span class="brand">카컨 수리관리</span>${nav}
     <span class="who">${esc(where)} · ${esc(S.me.name || S.me.email)}</span>
-    <button class="btn sm ${bellOn() ? 'bell-on' : ''}" data-act="bell" title="알림음 켜기/끄기">${bellOn() ? '🔔 알림 켜짐' : '🔕 알림 켜기'}</button>
+    <button class="btn sm ${bellOn() ? 'bell-on' : ''}" data-act="bell" title="알림음 켜기/끄기">${bellOn() ? '🔔' : '🔕'}<span class="bell-txt"> 알림 ${bellOn() ? '켜짐' : '켜기'}</span></button>
     <button class="btn sm" data-act="logout">로그아웃</button></div>`;
 }
 function render(){
@@ -314,7 +321,7 @@ function render(){
   if(S.view === 'done') return renderDone();
   if(S.view === 'new' && isHQ()) return renderNew();
   if(S.view === 'admin' && isAdmin()) return renderAdmin();
-  if(S.view === 'stats' && isHQ()) return renderStats();
+  if(S.view === 'stats' && isAdmin()) return renderStats();
   if(S.view === 'today' && isHQ()) return renderToday();
   return isHQ() ? renderBoard() : renderShopList();
 }
@@ -402,6 +409,8 @@ function orderCard(o, hq, why){
 }
 
 // ===================== 오늘 할 일 (본사 첫 화면) =====================
+// '확인 필요' 경고 중 오늘 할 일에 모을 것(출고 지연은 따로 묶음)
+const warnTexts = o => flags(o).filter(([k, t]) => k === 'warn').map(([, t]) => t);
 const todayMineKey = () => 'carcun_today_mine_' + (S.me ? S.me.id : '');
 const todayMine = () => lsGet(todayMineKey()) !== '0';
 async function renderToday(quiet){
@@ -420,6 +429,8 @@ async function renderToday(quiet){
   const secs = [
     { key:'unseen', icon:'⚠️', title:'공업사 미확인 배정', hint:'배정했지만 공업사가 아직 차량을 열어 보지 않았습니다. 단톡방이나 전화로 확인하세요',
       items: list.filter(unseenByShop), why: o => `배정 후 ${hrs(o.created_at)}시간 · ${o.shops ? o.shops.name : ''}` },
+    { key:'warn', icon:'🔔', title:'사진 지연 · 보험 미접수', hint:'공업사에 사진을 요청하거나, 보험 접수 여부를 확인하세요',
+      items: list.filter(o => warnTexts(o).length), why: o => warnTexts(o).join(' · ') },
     { key:'notify', icon:'📞', title:'고객 안내 필요', hint:'차량 화면에서 [문구 복사] → 고객에게 보내고 [안내 완료]',
       items: list.filter(needNotify), why: o => `안내할 내용: ${o.customer_event || '진행'} · ${fmtDT(o.customer_event_at)}` },
     { key:'late', icon:'⏰', title:'출고 지연', hint:'공업사에 상황을 확인하고 고객에게 안내하세요',
@@ -498,12 +509,12 @@ async function renderStats(){
     <div class="row" style="margin-bottom:12px">
       ${[7, 14, 30, 90].map(d => `<button class="btn sm ${S.statDays === d ? 'pri' : ''}" data-act="statDays" data-v="${d}">최근 ${d}일</button>`).join('')}
     </div>
-    <div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>공업사</th><th>등록</th><th>입고 사진 기한 내</th><th>중간 사진 기한 내</th><th>출고 예정일 준수</th><th>평균 수리기간</th><th>예정일 변경</th></tr></thead><tbody>
+    <div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>공업사</th><th>등록</th><th>입고 사진 기한 내</th><th>도장 전 사진 기한 내</th><th>출고 예정일 준수</th><th>평균 수리기간</th><th>예정일 변경</th></tr></thead><tbody>
       ${rows.length ? rows.map(r => tr(r)).join('') + (rows.length > 1 ? tr(all, true) : '') : '<tr><td colspan="7" class="sub">이 기간에 등록된 차량이 없습니다</td></tr>'}
     </tbody></table></div></div>
     <div class="card"><h2>계산 기준</h2><ul class="sub" style="margin:0;padding-left:18px;line-height:1.7;font-size:14px">
       <li><b>입고 사진 기한 내</b>: 픽업 후 24시간 안에 입고 사진 등록 (픽업 시간이 없으면 등록 후 48시간). 기준 90%</li>
-      <li><b>중간 사진 기한 내</b>: 입고 후 24시간 안에 중간 사진 등록. 기준 80%</li>
+      <li><b>도장 전 사진 기한 내</b>: 입고 후 24시간 안에 도장 전 사진 등록. 기준 80%</li>
       <li><b>출고 예정일 준수</b>: 출고일이 출고 예정일 이전 (예정일을 바꾼 경우 바뀐 날짜 기준)</li>
       <li>아직 기한이 안 지난 차량은 빼고 계산합니다. 시험 차량(차량번호에 '테', 고객명 '테스트')과 접수 취소 차량도 뺍니다.</li>
       <li>기간은 차량 <b>등록일</b> 기준입니다.</li></ul></div>`;
@@ -592,13 +603,25 @@ async function renderDetail(id){
     <p class="sub" style="margin:0">${fmtDT(o.canceled_at)} · ${esc(o.cancel_reason || '')}</p>
     ${hq ? '<div style="margin-top:12px"><button class="btn sm" data-act="undoCancel">취소 되돌리기</button></div>' : ''}</div>` : ''}
 
-  <div class="card"><h2>수리 진행 단계</h2>${stepper(o.stage)}
-    ${o.stage === LAST ? `<p class="note" style="margin:12px 0 0">출고 ${fmtDT(o.released_at)} · 수리기간 <b>${repairDays(o)}일</b>${dueDiffLabel(o) ? ' · ' + dueDiffLabel(o) : ''}</p>` : ''}</div>
+  <div class="card"><h2>지금 상태</h2>${stepper(o.stage)}
+    ${o.stage === LAST
+      ? `<p class="note" style="margin:12px 0 0">출고 ${fmtDT(o.released_at)} · 수리기간 <b>${repairDays(o)}일</b>${dueDiffLabel(o) ? ' · ' + dueDiffLabel(o) : ''}</p>`
+      : (o.canceled_at ? '' : `<p style="margin:12px 0 0;font-size:15px">다음: <b>${esc(NEXT_GUIDE[o.stage + 1])}</b></p>`)}
+    <div class="ops-line"><span class="sub">출고 예정</span><b>${fmtDay(o.due_date)}</b>${o.delay_reason ? `<span class="sub">(${esc(o.delay_reason)})</span>` : ''}
+      ${o.stage < LAST && !o.canceled_at ? `<button class="btn sm" data-act="toggleDue">${S.dueOpen ? '닫기' : (o.due_date ? '예정일 변경' : '예정일 입력')}</button>` : ''}</div>
+    ${S.dueOpen ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:12px">
+      <label class="f">새 출고 예정일<input type="date" id="dueDate" value="${esc(o.due_date || '')}"></label>
+      ${o.due_date ? `<label class="f">변경 사유 (필수)<select id="dueReason"><option value="">선택하세요</option>${DELAY_REASONS.map(r => `<option>${r}</option>`).join('')}</select></label>` : ''}
+      <button class="btn orange" data-act="saveDue">저장 · 영업팀 알림</button></div>` : ''}
+    ${hq && o.shop_id ? `<div class="ops-line"><span class="sub">공업사 확인</span>${o.shop_seen_at ? `✅ ${fmtDT(o.shop_seen_at)}` : '<span style="color:var(--warn);font-weight:700">⏳ 아직 차량을 열어 보지 않음</span>'}</div>` : ''}
+  </div>
 
-  ${hq && !o.canceled_at ? `<div class="card"><h2>고객 안내 문구</h2>
-    <textarea class="in" id="custMsg" rows="6" style="min-height:150px">${esc(customerMsg(o, c))}</textarea>
-    <div class="row" style="margin-top:8px"><button class="btn sm pri" data-act="copyMsg">문구 복사</button>
-      <span class="sub" style="font-size:13px">필요하면 고친 뒤 복사해서 카톡·문자로 보내세요</span></div>
+  ${hq && !o.canceled_at ? `<div class="card">
+    <details class="more flat" ${needNotify(o) ? 'open' : ''}><summary>고객 안내 문구 ${needNotify(o) ? '' : '<span class="sub" style="font-weight:400">(눌러서 열기)</span>'}</summary>
+      <textarea class="in" id="custMsg" rows="6" style="min-height:150px">${esc(customerMsg(o, c))}</textarea>
+      <div class="row" style="margin-top:8px"><button class="btn sm pri" data-act="copyMsg">문구 복사</button>
+        <span class="sub" style="font-size:13px">필요하면 고친 뒤 복사해서 카톡·문자로 보내세요</span></div>
+    </details>
     <div class="ops-line" style="border-top:1px solid var(--line);padding-top:10px">
       ${needNotify(o)
         ? `<span class="badge b-info">📞 안내 필요</span><span>${esc(o.customer_event || '진행')} · ${fmtDT(o.customer_event_at)}</span>
@@ -615,19 +638,23 @@ async function renderDetail(id){
       ${addrHidden ? '<dt>주소</dt><dd class="sub">딜리버리 완료 후에는 표시되지 않습니다</dd>' : `
       <dt>픽업 주소</dt><dd>${esc(c.pickup_address || '-')}</dd>
       <dt>딜리버리 주소</dt><dd>${esc(c.delivery_address || c.pickup_address || '-')}</dd>`}
+      ${o.stage === -1 ? `<dt>픽업 희망</dt><dd>${fmtDT(o.pickup_at)}</dd>` : ''}
     </dl></div>
 
-  <div class="card"><h2>수리 정보</h2>
+  <div class="card"><h2>사진 (${paths.length}장)</h2>
+    ${photoHtml ? `<div class="photos">${photoHtml}</div>` : '<div class="sub">아직 사진이 없습니다</div>'}</div>
+
+  ${memoCards(o, memos, hq)}
+
+  <div class="card"><details class="more flat" ${S.cancelOpen ? 'open' : ''}><summary>상세 정보 (보험 · 렌트 · 입고 시각${canCancel(o) ? ' · 접수 취소' : ''})</summary>
     <dl class="kv">
       <dt>보험사</dt><dd>${esc(o.insurer || '-')}</dd>
       <dt>사고 유형</dt><dd>${esc(accType(o.accident_type) || '-')}</dd>
       <dt>접수번호</dt><dd>${esc(o.claim_no || '-')} <span class="badge ${o.claim_status==='미접수'?'b-warn':'b-ok'}">${esc(o.claim_status)}</span></dd>
       <dt>렌트</dt><dd>${o.need_rental ? '필요' : '불필요'}</dd>
-      <dt>픽업 희망</dt><dd>${fmtDT(o.pickup_at)}</dd>
+      ${o.stage !== -1 ? `<dt>픽업 희망</dt><dd>${fmtDT(o.pickup_at)}</dd>` : ''}
       ${hq ? `<dt>유입 경로</dt><dd>${esc(o.source || '-')}</dd>` : ''}
       <dt>입고</dt><dd>${fmtDT(o.intake_at)}</dd>
-      <dt>출고 예정</dt><dd>${fmtDay(o.due_date)}${o.delay_reason ? ` <span class="sub">(${esc(o.delay_reason)})</span>` : ''}</dd>
-      ${hq && o.shop_id ? `<dt>공업사 확인</dt><dd>${o.shop_seen_at ? `✅ ${fmtDT(o.shop_seen_at)}` : '<span style="color:var(--warn);font-weight:700">⏳ 아직 차량을 열어 보지 않음</span>'}</dd>` : ''}
     </dl>
     ${hq && o.stage < LAST && !o.canceled_at ? `<div class="row" style="margin-top:12px;gap:8px">
       <button class="btn sm" data-act="advance">${ICON_CAM} ${esc(NEXT[o.stage + 1])} 대신 올리기</button>
@@ -639,28 +666,17 @@ async function renderDetail(id){
         <div class="row"><button class="btn orange" data-act="doCancel" style="flex:1">접수 취소</button><button class="btn" data-act="toggleCancel">닫기</button></div>
         <p class="sub" style="font-size:13px;margin:0">${o.stage >= 0 ? '<b style="color:var(--bad)">공업사에서 작업 중인 차량입니다.</b> 취소하면 공업사에 작업 중단 알림이 갑니다. ' : ''}취소해도 사진과 기록은 남고, 현황판 '취소(30일)'에서 되돌릴 수 있습니다.</p></div>`
       : '<button class="btn sm" data-act="toggleCancel" style="color:var(--bad)">접수 취소</button>'}</div>` : ''}
-    ${o.stage < LAST && !o.canceled_at ? `<div style="margin-top:12px"><button class="btn sm" data-act="toggleDue">${S.dueOpen ? '닫기' : (o.due_date ? '출고 예정일 변경' : '출고 예정일 입력')}</button></div>` : ''}
-    ${S.dueOpen ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:12px">
-      <label class="f">새 출고 예정일<input type="date" id="dueDate" value="${esc(o.due_date || '')}"></label>
-      ${o.due_date ? `<label class="f">변경 사유 (필수)<select id="dueReason"><option value="">선택하세요</option>${DELAY_REASONS.map(r => `<option>${r}</option>`).join('')}</select></label>` : ''}
-      <button class="btn orange" data-act="saveDue">저장 · 영업팀 알림</button></div>` : ''}
-  </div>
+  </details></div>
 
-  <div class="card"><h2>단계별 사진 (${paths.length}장)</h2>
-    ${photoHtml ? `<div class="photos">${photoHtml}</div>` : '<div class="sub">아직 사진이 없습니다</div>'}</div>
+  <div class="card"><details class="more flat"><summary>진행 기록 (${logs.length}건)</summary>${tl ? `<ul class="tl">${tl}</ul>` : '<div class="sub">기록이 없습니다</div>'}</details></div>
 
-  <div class="card"><h2>진행 기록</h2>${tl ? `<ul class="tl">${tl}</ul>` : '<div class="sub">기록이 없습니다</div>'}</div>
-
-  ${memoCards(o, memos, hq)}
-
-  <div class="bottom"><div class="in2">
+  ${(!hq || o.stage === LAST || o.canceled_at) ? `<div class="bottom"><div class="in2">
     ${o.canceled_at ? '<div class="note" style="text-align:center">접수 취소된 차량입니다</div>' : ''}
     ${!hq && o.stage < LAST && !o.canceled_at ? `<button class="btn pri big" data-act="advance">${ICON_CAM} ${BTN[o.stage + 1]}</button>` : ''}
     ${!hq && o.stage >= 0 && o.stage < LAST && !o.canceled_at ? `<button class="btn" data-act="extraPhoto">사진 추가 (선택)</button>` : ''}
-    ${hq && o.stage < LAST && !o.canceled_at ? '<div class="sub" style="text-align:center;font-size:13px">사진은 공업사가 올립니다 · 대신 올릴 때는 위 수리 정보 칸의 버튼</div>' : ''}
     ${o.stage === LAST && !o.delivered_at && hq ? `<button class="btn green big" data-act="deliver">고객 딜리버리 완료</button>` : ''}
     ${o.stage === LAST && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
-  </div></div>`;
+  </div></div>` : ''}`;
   let restoredMemo = false;
   Object.entries(keepMemo).forEach(([k, v]) => { const m = document.getElementById(k); if(m){ m.value = v; restoredMemo = true; } });
   // 다시 그리면 남는 입력은 메모뿐이므로 그것만 기준으로 표시
@@ -787,13 +803,17 @@ function orderForm(o, c, isEdit){
     <div class="grid2">
       <label class="f">인증 공업사 *<select name="shop_id" required><option value="">선택</option>${S.shops.filter(s => s.active || s.id === o.shop_id).map(s => `<option value="${s.id}" ${s.id === o.shop_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
       <label class="f">픽업 희망 일시<input type="datetime-local" name="pickup_at" value="${esc(toLocalInput(o.pickup_at))}"></label>
-      ${isEdit
-        ? `<label class="f">출고 예정일<input type="date" value="${esc(o.due_date || '')}" disabled><span class="sub" style="font-size:12px">변경은 차량 화면의 [출고 예정일 변경]에서 (사유가 기록됩니다)</span></label>`
-        : `<label class="f">출고 예정일<input type="date" name="due_date" value="${esc(o.due_date || '')}"></label>`}
-      <label class="f">유입 경로<select name="source"><option value="">선택</option>${opt(SOURCES, o.source)}</select></label>
     </div>
-    <label class="chk"><input type="checkbox" name="need_rental" ${o.need_rental ? 'checked' : ''}> 렌트 필요</label>
-    <label class="chk" style="background:var(--warn-bg);border-radius:10px;padding:8px 12px;margin-top:8px"><input type="checkbox" name="consent" ${o.consent ? 'checked' : ''}> 고객이 공업사에 연락처·주소 제공에 동의함 (필수)</label>
+    <details class="more" ${isEdit && (o.source || o.need_rental) ? 'open' : ''}><summary>추가 정보 (유입 경로 · 렌트 · 출고 예정일)</summary>
+      <div class="grid2" style="margin-top:8px">
+        <label class="f">유입 경로<select name="source"><option value="">선택</option>${opt(SOURCES, o.source)}</select></label>
+        ${isEdit
+          ? `<label class="f">출고 예정일<input type="date" value="${esc(o.due_date || '')}" disabled><span class="sub" style="font-size:12px">변경은 차량 화면의 [출고 예정일 변경]에서 (사유가 기록됩니다)</span></label>`
+          : `<label class="f">출고 예정일 <span class="sub" style="font-size:12px">(비우면 입고 때 +3일 자동)</span><input type="date" name="due_date" value="${esc(o.due_date || '')}"></label>`}
+      </div>
+      <label class="chk"><input type="checkbox" name="need_rental" ${o.need_rental ? 'checked' : ''}> 렌트 필요</label>
+    </details>
+    <label class="chk" style="background:var(--warn-bg);border-radius:10px;padding:8px 12px;margin-top:8px"><input type="checkbox" name="consent" ${o.consent ? 'checked' : ''}> 고객에게 개인정보 처리 안내 문자를 보냈음 (필수)</label>
     <div class="row" style="margin-top:16px">
       <button class="btn pri" data-act="${isEdit ? 'saveEdit' : 'saveNew'}" type="button" style="flex:1">${isEdit ? '수정 저장' : '등록하고 공업사에 배정'}</button>
       ${isEdit ? '<button class="btn" data-act="cancelEdit" type="button">취소</button>' : ''}
@@ -896,7 +916,7 @@ function validate(d){
   if(!d.order.plate) return '차량번호를 입력하세요';
   if(!d.contact.phone) return '연락처를 입력하세요';
   if(!d.order.shop_id) return '인증 공업사를 선택하세요';
-  if(!d.order.consent) return '고객 동의를 확인하고 체크하세요';
+  if(!d.order.consent) return '고객에게 개인정보 처리 안내 문자를 보냈는지 확인하고 체크하세요';
   return '';
 }
 
@@ -961,7 +981,7 @@ async function copyText(t){
 
 // ===================== 실시간 알림 =====================
 // 앱(브라우저)이 열려 있는 동안만 동작한다. 앱을 닫으면 알림이 오지 않는다.
-// 공업사: 새 차량 배정 / 본사: 출고 완료·새 경고(소리), 입고·중간 사진(알림판만)
+// 공업사: 새 차량 배정·작업 중단 / 본사: 출고 완료·예정일 변경·새 경고
 const LIVE = { ch: null, known: null, ctx: null, warnReady: false };
 const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
 const lsSet = (k, v) => { try{ localStorage.setItem(k, v); }catch(e){} };
