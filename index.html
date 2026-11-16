@@ -137,7 +137,7 @@ const CANCEL_REASONS = ['고객 취소','전손 처리','다른 곳에서 수리
 // 입고 대기: 본사 누구나 / 입고·수리 중: 대표만 / 출고 이후: 불가
 const canCancel = o => S.hasCancel && isHQ() && !o.canceled_at && !o.delivered_at && (o.stage === -1 || (isAdmin() && o.stage >= 0 && o.stage < LAST));
 
-const S = { hasCancel:false, cancelOpen:false, me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
+const S = { statDays:14, hasCancel:false, cancelOpen:false, me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
 const $app = document.getElementById('app');
 const $top = document.getElementById('top');
 
@@ -170,7 +170,34 @@ let toastT;
 function toast(msg){ const t = document.getElementById('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', 3200); }
 function busy(on, msg){ document.getElementById('busyMsg').textContent = msg || '처리 중…'; document.getElementById('busy').style.display = on ? 'flex' : 'none'; }
 function fail(e){ busy(false); console.error(e); toast((e && (e.message || e.error_description)) || '오류가 발생했습니다'); }
-function go(view, id){ S.view = view; S.id = id || null; S.editing = false; S.dueOpen = false; S.cancelOpen = false; render(); window.scrollTo(0,0); }
+// 화면 이동 + 휴대폰 뒤로가기 기록
+// opt.replace: 기록을 쌓지 않고 바꿈 / opt.fromHistory: 뒤로가기로 온 것 / opt.edit: 수정 화면
+function go(view, id, opt){
+  opt = opt || {};
+  S.view = view; S.id = id || null; S.editing = !!opt.edit; S.dueOpen = false; S.cancelOpen = false;
+  if(!opt.fromHistory){
+    const cur = history.state || {};
+    const same = cur.view === view && (cur.id || null) === S.id && !!cur.edit === S.editing;
+    const st = { view, id: S.id, edit: S.editing };
+    try{
+      if(opt.replace || same || view === 'done') history.replaceState({ ...st, d: cur.d || 0, root: same ? cur.root : false }, '');
+      else history.pushState({ ...st, d: (cur.d || 0) + 1 }, '');
+    }catch(e){}
+  }
+  render(); window.scrollTo(0,0);
+}
+// 앱 안의 ← 버튼: 이전 화면이 있으면 휴대폰 뒤로가기와 똑같이 동작
+function goBack(){ if(history.state && history.state.d > 0) history.back(); else go('list', null, { replace: true }); }
+window.addEventListener('popstate', e => {
+  if(!S.me) return;
+  const st = e.state || { view: 'list' };
+  // 사진을 올리는 중에는 화면을 옮기지 않음
+  if(document.getElementById('busy').style.display === 'flex'){ try{ history.pushState({ view: S.view, id: S.id, edit: S.editing, d: (st.d || 0) + 1 }, ''); }catch(err){} return; }
+  if(st.root) toast('뒤로 버튼을 한 번 더 누르면 앱이 닫힙니다');
+  go(st.view || 'list', st.id, { fromHistory: true, edit: st.edit });
+});
+// 시작 화면 아래에 "한 번 더 누르면 종료" 안내용 기록을 하나 깔아 둠
+try{ history.replaceState({ view: 'list', d: 0, root: true }, ''); history.pushState({ view: 'list', d: 1 }, ''); }catch(e){}
 
 function flags(o){
   const f = [];
@@ -247,6 +274,7 @@ function renderTop(){
   const nav = isHQ() ? `<nav class="nav" aria-label="메뉴">
       <button data-act="nav" data-view="list" class="${S.view==='list'?'on':''}">현황</button>
       <button data-act="nav" data-view="new" class="${S.view==='new'?'on':''}">차량 등록</button>
+      <button data-act="nav" data-view="stats" class="${S.view==='stats'?'on':''}">입력률</button>
       ${isAdmin() ? `<button data-act="nav" data-view="admin" class="${S.view==='admin'?'on':''}">관리</button>` : ''}
     </nav>` : '';
   const where = S.me.role === 'shop' && S.me.shop ? S.me.shop.name : (S.me.role === 'admin' ? '대표' : S.me.role === 'staff' ? '본사' : '');
@@ -263,6 +291,7 @@ function render(){
   if(S.view === 'done') return renderDone();
   if(S.view === 'new' && isHQ()) return renderNew();
   if(S.view === 'admin' && isAdmin()) return renderAdmin();
+  if(S.view === 'stats' && isHQ()) return renderStats();
   return isHQ() ? renderBoard() : renderShopList();
 }
 function renderPending(){
@@ -330,6 +359,76 @@ function orderCard(o, hq){
     <div class="between" style="width:100%;font-size:13px"><b>${stageLabel(o.stage)}${o.stage < LAST ? ' · 다음 ' + nextName(o.stage) : ''}</b><span class="sub" style="font-size:13px">${tail}</span></div>
     <div class="sub" style="font-size:12px">마지막 업데이트 ${ago(o.updated_at)}</div>
   </button>`;
+}
+
+// ===================== 공업사별 입력률 (본사) =====================
+// 시험 차량(차량번호에 '테' 또는 고객명 '테스트')과 접수 취소 차량은 제외
+const isTestOrder = o => /테/.test(o.plate || '') || /테스트/.test(contactOf(o).customer_name || '');
+const pct = (a, b) => b ? Math.round(a / b * 100) : null;
+const rateCell = (r, target) => r === null ? '<span class="sub">-</span>' : `<b>${r}%</b>${target ? ` <span class="badge ${r >= target ? 'b-ok' : 'b-warn'}">${r >= target ? '기준 달성' : '기준 ' + target + '%'}</span>` : ''}`;
+async function renderStats(){
+  $app.innerHTML = '<div class="empty">불러오는 중…</div>';
+  await loadShops();
+  const since = new Date(Date.now() - S.statDays * 86400000).toISOString();
+  const { data, error } = await notCanceled(sb.from('repair_orders')
+    .select('id, plate, shop_id, stage, pickup_at, created_at, intake_at, released_at, due_date, order_contacts(customer_name)')
+    .gte('created_at', since));
+  if(error) return fail(error);
+  const orders = (data || []).filter(o => !isTestOrder(o));
+  // 중간 사진 시각, 예정일 변경 횟수는 진행 기록에서 계산
+  const mid = {}, dueChg = {};
+  const ids = orders.map(o => o.id);
+  for(let i = 0; i < ids.length; i += 100){
+    const { data: logs, error: e2 } = await sb.from('stage_logs').select('order_id, kind, stage, created_at').in('order_id', ids.slice(i, i + 100));
+    if(e2) return fail(e2);
+    (logs || []).forEach(l => {
+      if(l.kind === 'stage' && l.stage === 1 && !mid[l.order_id]) mid[l.order_id] = l.created_at;
+      if(l.kind === 'due') dueChg[l.order_id] = (dueChg[l.order_id] || 0) + 1;
+    });
+  }
+  if(S.view !== 'stats') return;
+  const now = Date.now(), H = 3600000;
+  const calc = list => {
+    // 입고 사진: 픽업 후 24시간(픽업 시간이 없으면 등록 후 48시간) 안에 등록했는가
+    let inDue = 0, inOk = 0, midDue = 0, midOk = 0, rel = 0, relOk = 0, chg = 0, days = 0;
+    list.forEach(o => {
+      const limit = o.pickup_at ? Date.parse(o.pickup_at) + 24*H : Date.parse(o.created_at) + 48*H;
+      if(o.intake_at || now > limit){ inDue++; if(o.intake_at && Date.parse(o.intake_at) <= limit) inOk++; }
+      if(o.intake_at){
+        const ml = Date.parse(o.intake_at) + 24*H;
+        if(mid[o.id] || now > ml){ midDue++; if(mid[o.id] && Date.parse(mid[o.id]) <= ml) midOk++; }
+      }
+      if(o.released_at){
+        rel++; days += repairDays(o);
+        if(o.due_date && toLocalInput(o.released_at).slice(0,10) <= o.due_date) relOk++;
+      }
+      if(dueChg[o.id]) chg++;
+    });
+    return { n: list.length, inR: pct(inOk, inDue), inDue, midR: pct(midOk, midDue), midDue, relR: pct(relOk, rel), rel, chg, avg: rel ? (days / rel).toFixed(1) : null };
+  };
+  const shopIds = [...new Set(orders.map(o => o.shop_id).filter(Boolean))];
+  const rows = shopIds.map(id => ({ name: shopNameOf(id) || '(공업사 미상)', ...calc(orders.filter(o => o.shop_id === id)) })).sort((a, b) => b.n - a.n);
+  const all = calc(orders);
+  const tr = (r, bold) => `<tr${bold ? ' style="background:var(--bg)"' : ''}><td>${bold ? '<b>전체</b>' : esc(r.name)}</td><td>${r.n}대</td>
+    <td>${rateCell(r.inR, 90)}<div class="sub" style="font-size:12px">${r.inDue}대 중</div></td>
+    <td>${rateCell(r.midR, 80)}<div class="sub" style="font-size:12px">${r.midDue}대 중</div></td>
+    <td>${rateCell(r.relR, 0)}<div class="sub" style="font-size:12px">출고 ${r.rel}대 중</div></td>
+    <td>${r.avg === null ? '<span class="sub">-</span>' : r.avg + '일'}</td><td>${r.chg}대</td></tr>`;
+  $app.innerHTML = `
+    <div class="between" style="margin-bottom:12px"><div><div class="sub">카컨 본사</div><div class="h1">공업사별 입력률</div></div>
+      <button class="btn sm" data-act="refresh">새로고침</button></div>
+    <div class="row" style="margin-bottom:12px">
+      ${[7, 14, 30, 90].map(d => `<button class="btn sm ${S.statDays === d ? 'pri' : ''}" data-act="statDays" data-v="${d}">최근 ${d}일</button>`).join('')}
+    </div>
+    <div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>공업사</th><th>등록</th><th>입고 사진 기한 내</th><th>중간 사진 기한 내</th><th>출고 예정일 준수</th><th>평균 수리기간</th><th>예정일 변경</th></tr></thead><tbody>
+      ${rows.length ? rows.map(r => tr(r)).join('') + (rows.length > 1 ? tr(all, true) : '') : '<tr><td colspan="7" class="sub">이 기간에 등록된 차량이 없습니다</td></tr>'}
+    </tbody></table></div></div>
+    <div class="card"><h2>계산 기준</h2><ul class="sub" style="margin:0;padding-left:18px;line-height:1.7;font-size:14px">
+      <li><b>입고 사진 기한 내</b>: 픽업 후 24시간 안에 입고 사진 등록 (픽업 시간이 없으면 등록 후 48시간). 기준 90%</li>
+      <li><b>중간 사진 기한 내</b>: 입고 후 24시간 안에 중간 사진 등록. 기준 80%</li>
+      <li><b>출고 예정일 준수</b>: 출고일이 출고 예정일 이전 (예정일을 바꾼 경우 바뀐 날짜 기준)</li>
+      <li>아직 기한이 안 지난 차량은 빼고 계산합니다. 시험 차량(차량번호에 '테', 고객명 '테스트')과 접수 취소 차량도 뺍니다.</li>
+      <li>기간은 차량 <b>등록일</b> 기준입니다.</li></ul></div>`;
 }
 
 // ===================== 공업사 목록 =====================
@@ -880,13 +979,14 @@ document.addEventListener('click', async e => {
   const act = t.dataset.act, id = t.dataset.id;
   try{
     switch(act){
-      case 'nav': S.filter = S.view === 'list' ? S.filter : 'all'; return go(t.dataset.view);
+      case 'nav': S.filter = S.view === 'list' ? S.filter : 'all'; return go(t.dataset.view, null, { replace: S.view === 'done' });
       case 'open': return go('detail', id);
-      case 'back': return go('list');
+      case 'back': return goBack();
       case 'refresh': return render();
       case 'reload': await loadMe(); startLive(); return go('list');
       case 'logout': stopLive(); await sb.auth.signOut(); S.me = null; return renderLogin();
       case 'bell': return toggleBell();
+      case 'statDays': S.statDays = +t.dataset.v; return renderStats();
       case 'toggleCancel': S.cancelOpen = !S.cancelOpen; return renderDetail(S.id);
       case 'doCancel': {
         const r = document.getElementById('cancelReason').value;
@@ -960,10 +1060,10 @@ document.addEventListener('click', async e => {
         if(error) throw error;
         const r2 = await sb.from('order_contacts').insert({ order_id: row.id, ...d.contact });
         busy(false); if(r2.error) throw r2.error;
-        toast('등록했습니다. 공업사 화면에 바로 표시됩니다'); return go('detail', row.id);
+        toast('등록했습니다. 공업사 화면에 바로 표시됩니다'); return go('detail', row.id, { replace: true });
       }
-      case 'edit': S.editing = true; return renderDetail(S.id);
-      case 'cancelEdit': S.editing = false; return renderDetail(S.id);
+      case 'edit': return go('detail', S.id, { edit: true });
+      case 'cancelEdit': return (history.state && history.state.edit && history.state.d > 0) ? history.back() : go('detail', S.id, { replace: true });
       case 'saveEdit': {
         const d = readForm(); const msg = validate(d); if(msg) return toast(msg);
         busy(true, '저장 중…'); markMine(S.cur.id, { due_date: d.order.due_date, shop_id: d.order.shop_id });
@@ -971,7 +1071,8 @@ document.addEventListener('click', async e => {
         if(r1.error) throw r1.error;
         const r2 = await sb.from('order_contacts').upsert({ order_id: S.cur.id, ...d.contact });
         busy(false); if(r2.error) throw r2.error;
-        S.editing = false; toast('수정했습니다'); return renderDetail(S.id);
+        toast('수정했습니다');
+        return (history.state && history.state.edit && history.state.d > 0) ? history.back() : go('detail', S.id, { replace: true });
       }
       case 'addShop': {
         const name = document.getElementById('shopName').value.trim();
