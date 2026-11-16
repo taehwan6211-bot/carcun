@@ -464,7 +464,8 @@ async function renderShopList(quiet){
 async function renderDetail(id){
   // 같은 차량 화면을 다시 그릴 때 쓰던 메모는 지우지 않고 유지
   const memoEl = document.getElementById('memoBody');
-  const keepMemo = S.id === id && memoEl ? memoEl.value : '';
+  // 메모 칸에 적힌 차량 번호(data-oid)가 같을 때만 유지 → 다른 차량으로 옮겨가지 않음
+  const keepMemo = memoEl && memoEl.dataset.oid === String(id) ? memoEl.value : '';
   $app.innerHTML = '<div class="empty">불러오는 중…</div>';
   const [ro, rl, rc, rm] = await Promise.all([
     sb.from('repair_orders').select('*, shops(name)').eq('id', id).maybeSingle(),
@@ -563,7 +564,7 @@ async function renderDetail(id){
   <div class="card"><h2>진행 기록</h2>${tl ? `<ul class="tl">${tl}</ul>` : '<div class="sub">기록이 없습니다</div>'}</div>
 
   <div class="card"><h2>메모 · 고객 연락 기록</h2>
-    <textarea class="in" id="memoBody" placeholder="예: 고객 통화, 출고 시간 14시로 조율"></textarea>
+    <textarea class="in" id="memoBody" data-oid="${esc(o.id)}" placeholder="예: 고객 통화, 출고 시간 14시로 조율"></textarea>
     <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo">메모 저장</button></div>
     ${memos.map(m => `<div class="memo">${esc(m.body)}<small>${esc(m.author_name || '')} · ${fmtDT(m.created_at)}</small></div>`).join('')}
   </div>
@@ -610,8 +611,20 @@ document.getElementById('cam').addEventListener('change', async e => {
       busy(false); toast('사진을 추가했습니다'); S.extra = false; return renderDetail(o.id);
     }
     markMine(o.id, { stage: o.stage + 1 });
-    const { data: nxt, error } = await sb.rpc('advance_stage', { p_order: o.id, p_photo: path, p_note: null });
-    if(error) throw error;
+    let { data: nxt, error } = await sb.rpc('advance_stage', { p_order: o.id, p_photo: path, p_note: null });
+    if(error){
+      // 응답만 끊기고 실제로는 저장됐을 수 있으므로 먼저 확인(다시 누르면 단계를 건너뛸 위험)
+      const chk = await sb.from('repair_orders').select('stage').eq('id', o.id).maybeSingle();
+      if(!chk.error && chk.data && chk.data.stage === o.stage + 1){ nxt = chk.data.stage; error = null; }
+      else if(!chk.error && chk.data && chk.data.stage === o.stage){
+        ({ data: nxt, error } = await sb.rpc('advance_stage', { p_order: o.id, p_photo: path, p_note: null }));
+      }
+    }
+    if(error){
+      markMine(o.id, { stage: o.stage }); busy(false); console.error(error);
+      alert('⚠️ 사진은 올라갔지만 단계 저장에 실패했습니다.\n\n인터넷 연결을 확인한 뒤 같은 버튼을 눌러 사진을 한 번 더 올려 주세요.');
+      return renderDetail(o.id);
+    }
     const { data: fresh } = await sb.from('repair_orders').select('*').eq('id', o.id).maybeSingle();
     busy(false);
     const f = fresh || o;
@@ -951,9 +964,12 @@ async function resyncLive(){
   const gone = [...LIVE.known.keys()].filter(id => !ids.has(id));
   if(gone.length){
     changed = true;
-    const { data: rows } = await sb.from('repair_orders').select(LIVE_COLS + (S.hasCancel ? ', canceled_at' : '')).in('id', gone);
-    (rows || []).forEach(o => handleRow(o));
-    gone.forEach(id => { if(LIVE.known) LIVE.known.delete(id); });
+    const { data: rows, error: goneErr } = await sb.from('repair_orders').select(LIVE_COLS + (S.hasCancel ? ', canceled_at' : '')).in('id', gone);
+    // 조회에 실패하면 기억 목록을 그대로 두고 다음 확인 때 다시 시도
+    if(!goneErr){
+      (rows || []).forEach(o => handleRow(o));
+      gone.forEach(id => { if(LIVE.known) LIVE.known.delete(id); });
+    }
   }
   if(changed) liveRefresh(null);
 }
@@ -1022,7 +1038,7 @@ document.addEventListener('click', async e => {
       case 'nav': S.filter = S.view === 'list' ? S.filter : 'all'; return go(t.dataset.view, null, { replace: S.view === 'done' });
       case 'open': return go('detail', id);
       case 'back': return goBack();
-      case 'refresh': return render();
+      case 'refresh': if(!leaveOk()) return; S.dirty = false; return render();
       case 'reload': await loadMe(); startLive(); return go('list');
       case 'logout': if(!leaveOk()) return; S.dirty = false; stopLive(); await sb.auth.signOut(); S.me = null; return renderLogin();
       case 'bell': return toggleBell();
