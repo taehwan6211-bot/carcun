@@ -133,8 +133,9 @@ const ACCIDENT_TYPES = ['자차','대물','피해'];
 const INSURERS = ['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','한화손해보험','롯데손해보험','흥국화재','MG손해보험','AXA손해보험','하나손해보험','캐롯손해보험'];
 const SOURCES = ['네이버 플레이스','네이버 블로그','카카오 채널','전화','지인 소개','기타'];
 const DOW = '일월화수목금토';
+const CANCEL_REASONS = ['고객 취소','중복 등록','테스트','기타'];
 
-const S = { me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
+const S = { hasCancel:false, cancelOpen:false, me:null, view:'list', id:null, filter:'all', q:'', orders:[], shops:[], pending:null, after:null, showReleased:false, editing:false, dueOpen:false };
 const $app = document.getElementById('app');
 const $top = document.getElementById('top');
 
@@ -167,10 +168,11 @@ let toastT;
 function toast(msg){ const t = document.getElementById('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', 3200); }
 function busy(on, msg){ document.getElementById('busyMsg').textContent = msg || '처리 중…'; document.getElementById('busy').style.display = on ? 'flex' : 'none'; }
 function fail(e){ busy(false); console.error(e); toast((e && (e.message || e.error_description)) || '오류가 발생했습니다'); }
-function go(view, id){ S.view = view; S.id = id || null; S.editing = false; S.dueOpen = false; render(); window.scrollTo(0,0); }
+function go(view, id){ S.view = view; S.id = id || null; S.editing = false; S.dueOpen = false; S.cancelOpen = false; render(); window.scrollTo(0,0); }
 
 function flags(o){
   const f = [];
+  if(o.canceled_at){ f.push(['done','접수 취소']); return f; }
   if(o.delivered_at){ f.push(['done','딜리버리 완료']); return f; }
   if(o.stage === LAST) f.push(['ok','딜리버리 대기']);
   if(o.stage === -1){
@@ -229,7 +231,12 @@ async function loadMe(){
     if(!sh || !sh.active) S.me.active = false;
   }
   if(isHQ()) await loadShops();
+  // 접수 취소 칸이 DB에 있는지 확인(SQL 실행 전에는 취소 기능을 숨김)
+  const probe = await sb.from('repair_orders').select('canceled_at').limit(1);
+  S.hasCancel = !probe.error;
 }
+const notCanceled = qy => S.hasCancel ? qy.is('canceled_at', null) : qy;
+const isLive = o => !o.delivered_at && !o.canceled_at;
 async function loadShops(){ const { data } = await sb.from('shops').select('*').order('name'); S.shops = data || []; }
 
 // ===================== 화면 전환 =====================
@@ -268,26 +275,27 @@ async function renderBoard(quiet){
   const since = new Date(Date.now() - 30*86400000).toISOString();
   const { data, error } = await sb.from('repair_orders')
     .select('*, shops(name), order_contacts(customer_name)')
-    .or(`delivered_at.is.null,delivered_at.gt."${since}"`)
+    .or(S.hasCancel ? `and(delivered_at.is.null,canceled_at.is.null),delivered_at.gt."${since}",canceled_at.gt."${since}"` : `delivered_at.is.null,delivered_at.gt."${since}"`)
     .order('updated_at', { ascending: false });
   if(error) return fail(error);
   if(S.view !== 'list') return;
   S.orders = data || [];
   checkWarnings(S.orders);
-  const act = S.orders.filter(o => !o.delivered_at);
+  const act = S.orders.filter(isLive);
   const today = todayStr();
   const k = {
     all: act.length,
     check: act.filter(needsCheck).length,
     out: S.orders.filter(o => o.released_at && toLocalInput(o.released_at).slice(0,10) === today).length,
     wait: act.filter(o => o.stage === LAST).length,
-    done: S.orders.filter(o => o.delivered_at).length
+    done: S.orders.filter(o => o.delivered_at).length,
+    canceled: S.orders.filter(o => o.canceled_at).length
   };
   const kpi = (key, label, cls) => `<button class="kpi ${cls||''} ${S.filter===key?'on':''}" data-act="filter" data-f="${key}"><span>${label}</span><b>${k[key]}</b></button>`;
   $app.innerHTML = `
     <div class="between" style="margin-bottom:12px"><div><div class="sub">카컨 본사</div><div class="h1">수리 진행 현황</div></div>
       <button class="btn sm" data-act="refresh">새로고침</button></div>
-    <div class="kpis">${kpi('all','진행 중')}${kpi('check','확인 필요','w')}${kpi('out','오늘 출고','g')}${kpi('wait','딜리버리 대기')}${kpi('done','완료(30일)')}</div>
+    <div class="kpis">${kpi('all','진행 중')}${kpi('check','확인 필요','w')}${kpi('out','오늘 출고','g')}${kpi('wait','딜리버리 대기')}${kpi('done','완료(30일)')}${S.hasCancel ? kpi('canceled','취소(30일)') : ''}</div>
     <input class="in" id="q" placeholder="차량번호 · 고객명 · 공업사 검색" value="${esc(S.q)}" style="margin-bottom:12px">
     <div id="boardList"></div>`;
   drawBoardList();
@@ -296,10 +304,11 @@ function drawBoardList(){
   const box = document.getElementById('boardList'); if(!box) return;
   const today = todayStr();
   let list = S.orders;
-  if(S.filter === 'all') list = list.filter(o => !o.delivered_at);
-  if(S.filter === 'check') list = list.filter(o => !o.delivered_at && needsCheck(o));
+  if(S.filter === 'all') list = list.filter(isLive);
+  if(S.filter === 'check') list = list.filter(o => isLive(o) && needsCheck(o));
   if(S.filter === 'out') list = list.filter(o => o.released_at && toLocalInput(o.released_at).slice(0,10) === today);
-  if(S.filter === 'wait') list = list.filter(o => !o.delivered_at && o.stage === LAST);
+  if(S.filter === 'wait') list = list.filter(o => isLive(o) && o.stage === LAST);
+  if(S.filter === 'canceled') list = list.filter(o => o.canceled_at);
   if(S.filter === 'done') list = list.filter(o => o.delivered_at);
   const q = S.q.trim().replace(/\s/g,'');
   if(q) list = list.filter(o => [o.plate, contactOf(o).customer_name, o.shops && o.shops.name, o.car_model].join(' ').replace(/\s/g,'').includes(q));
@@ -325,7 +334,7 @@ function orderCard(o, hq){
 async function renderShopList(quiet){
   if(!quiet) $app.innerHTML = '<div class="empty">불러오는 중…</div>';
   let qy = sb.from('repair_orders').select('*').order('updated_at', { ascending: false });
-  qy = S.showReleased ? qy.not('released_at', 'is', null).limit(100) : qy.lt('stage', LAST);
+  qy = S.showReleased ? qy.not('released_at', 'is', null).limit(100) : notCanceled(qy.lt('stage', LAST));
   const { data, error } = await qy;
   if(error) return fail(error);
   if(S.view !== 'list') return;
@@ -390,11 +399,14 @@ async function renderDetail(id){
     ${hq ? '<button class="btn sm" data-act="edit">정보 수정</button>' : ''}
   </div>
   <div style="margin:0 0 12px 4px">${badges(o)}</div>
+  ${o.canceled_at ? `<div class="card" style="border:2px solid var(--line);background:#F9FAFB"><h2>접수 취소된 차량</h2>
+    <p class="sub" style="margin:0">${fmtDT(o.canceled_at)} · ${esc(o.cancel_reason || '')}</p>
+    ${hq ? '<div style="margin-top:12px"><button class="btn sm" data-act="undoCancel">취소 되돌리기</button></div>' : ''}</div>` : ''}
 
   <div class="card"><h2>수리 진행 단계</h2>${stepper(o.stage)}
     ${o.stage === LAST ? `<p class="note" style="margin:12px 0 0">출고 ${fmtDT(o.released_at)} · 수리기간 <b>${repairDays(o)}일</b>${dueDiffLabel(o) ? ' · ' + dueDiffLabel(o) : ''}</p>` : ''}</div>
 
-  ${hq ? `<div class="card"><h2>고객 안내 문구</h2>
+  ${hq && !o.canceled_at ? `<div class="card"><h2>고객 안내 문구</h2>
     <textarea class="in" id="custMsg" rows="6" style="min-height:150px">${esc(customerMsg(o, c))}</textarea>
     <div class="row" style="margin-top:8px"><button class="btn sm pri" data-act="copyMsg">문구 복사</button>
       <span class="sub" style="font-size:13px">필요하면 고친 뒤 복사해서 카톡·문자로 보내세요</span></div></div>` : ''}
@@ -419,7 +431,14 @@ async function renderDetail(id){
       <dt>입고</dt><dd>${fmtDT(o.intake_at)}</dd>
       <dt>출고 예정</dt><dd>${fmtDay(o.due_date)}${o.delay_reason ? ` <span class="sub">(${esc(o.delay_reason)})</span>` : ''}</dd>
     </dl>
-    ${o.stage < LAST ? `<div style="margin-top:12px"><button class="btn sm" data-act="toggleDue">${S.dueOpen ? '닫기' : (o.due_date ? '출고 예정일 변경' : '출고 예정일 입력')}</button></div>` : ''}
+    ${hq && S.hasCancel && o.stage === -1 && !o.canceled_at ? `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+      ${S.cancelOpen ? `<div style="display:flex;flex-direction:column;gap:10px">
+        <label class="f">취소 사유 (필수)<select id="cancelReason"><option value="">선택하세요</option>${CANCEL_REASONS.map(r => `<option>${r}</option>`).join('')}</select></label>
+        <label class="f">상세 내용 (기타일 때 필수)<input id="cancelNote" placeholder="예: 고객이 다른 곳에서 수리하기로 함"></label>
+        <div class="row"><button class="btn orange" data-act="doCancel" style="flex:1">접수 취소</button><button class="btn" data-act="toggleCancel">닫기</button></div>
+        <p class="sub" style="font-size:13px;margin:0">취소해도 기록은 남고, 현황판 '취소(30일)'에서 되돌릴 수 있습니다.</p></div>`
+      : '<button class="btn sm" data-act="toggleCancel" style="color:var(--bad)">접수 취소</button>'}</div>` : ''}
+    ${o.stage < LAST && !o.canceled_at ? `<div style="margin-top:12px"><button class="btn sm" data-act="toggleDue">${S.dueOpen ? '닫기' : (o.due_date ? '출고 예정일 변경' : '출고 예정일 입력')}</button></div>` : ''}
     ${S.dueOpen ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:12px">
       <label class="f">새 출고 예정일<input type="date" id="dueDate" value="${esc(o.due_date || '')}"></label>
       ${o.due_date ? `<label class="f">변경 사유 (필수)<select id="dueReason"><option value="">선택하세요</option>${DELAY_REASONS.map(r => `<option>${r}</option>`).join('')}</select></label>` : ''}
@@ -438,8 +457,9 @@ async function renderDetail(id){
   </div>
 
   <div class="bottom"><div class="in2">
-    ${o.stage < LAST ? `<button class="btn pri big" data-act="advance">${ICON_CAM} ${BTN[o.stage + 1]}</button>` : ''}
-    ${o.stage >= 0 && o.stage < LAST ? `<button class="btn" data-act="extraPhoto">사진 추가 (선택)</button>` : ''}
+    ${o.canceled_at ? '<div class="note" style="text-align:center">접수 취소된 차량입니다</div>' : ''}
+    ${o.stage < LAST && !o.canceled_at ? `<button class="btn pri big" data-act="advance">${ICON_CAM} ${BTN[o.stage + 1]}</button>` : ''}
+    ${o.stage >= 0 && o.stage < LAST && !o.canceled_at ? `<button class="btn" data-act="extraPhoto">사진 추가 (선택)</button>` : ''}
     ${o.stage === LAST && !o.delivered_at && hq ? `<button class="btn green big" data-act="deliver">고객 딜리버리 완료</button>` : ''}
     ${o.stage === LAST && (o.delivered_at || !hq) ? `<div class="note" style="text-align:center">${o.delivered_at ? '딜리버리까지 완료된 차량입니다' : '출고 완료 · 딜리버리는 본사에서 처리합니다'}</div>` : ''}
   </div></div>`;
@@ -767,7 +787,10 @@ function shopNameOf(id){ return (S.shops.find(s => s.id === id) || {}).name || '
 function handleRow(n){
   if(!n || !n.id || !LIVE.known) return;
   const prev = LIVE.known.get(n.id);
-  if(n.delivered_at){ LIVE.known.delete(n.id); return; }
+  if(n.delivered_at || n.canceled_at){
+    if(n.canceled_at && prev && S.me.role === 'shop') notify('접수 취소', `${n.plate} · 본사에서 접수를 취소했습니다`, null, false);
+    LIVE.known.delete(n.id); return;
+  }
   LIVE.known.set(n.id, { stage: n.stage, shop_id: n.shop_id, due_date: n.due_date || null });
   if(S.me.role === 'shop'){
     if(n.shop_id === S.me.shop_id && (!prev || prev.shop_id !== n.shop_id) && n.stage < LAST)
@@ -785,7 +808,7 @@ async function startLive(){
   stopLive();
   if(!S.me || !S.me.active || S.me.role === 'pending') return;
   const me = S.me;
-  const { data } = await sb.from('repair_orders').select(LIVE_COLS).is('delivered_at', null);
+  const { data } = await notCanceled(sb.from('repair_orders').select(LIVE_COLS).is('delivered_at', null));
   if(S.me !== me) return;
   LIVE.known = new Map((data || []).map(o => [o.id, { stage: o.stage, shop_id: o.shop_id, due_date: o.due_date || null }]));
   LIVE.ch = sb.channel('orders-live')
@@ -799,7 +822,7 @@ function stopLive(){
 // 실시간 연결이 끊겼거나 꺼져 있어도 놓친 변경을 잡아내는 예비 확인
 async function resyncLive(){
   if(!LIVE.known || !S.me) return;
-  const { data } = await sb.from('repair_orders').select(LIVE_COLS).is('delivered_at', null);
+  const { data } = await notCanceled(sb.from('repair_orders').select(LIVE_COLS).is('delivered_at', null));
   if(!data || !LIVE.known) return;
   const ids = new Set(data.map(o => o.id));
   let changed = false;
@@ -825,7 +848,7 @@ function checkWarnings(orders){
   if(!isHQ()) return;
   const key = 'carcun_warn_seen_' + S.me.id;
   const now = [];
-  orders.filter(o => !o.delivered_at).forEach(o => flags(o).forEach(([k, t]) => { if(k === 'warn' || k === 'bad') now.push(o.id + '|' + t); }));
+  orders.filter(isLive).forEach(o => flags(o).forEach(([k, t]) => { if(k === 'warn' || k === 'bad') now.push(o.id + '|' + t); }));
   const stored = lsGet(key);
   let seen; try{ seen = new Set(JSON.parse(stored || '[]')); }catch(e){ seen = new Set(); }
   const fresh = now.filter(k => !seen.has(k));
@@ -841,7 +864,7 @@ function checkWarnings(orders){
   if(fresh.length > 3) notify('확인 필요', `그 외 ${fresh.length - 3}건 · 현황판의 '확인 필요'를 눌러 보세요`, null, false);
 }
 async function pollWarnings(){
-  const { data } = await sb.from('repair_orders').select('*, shops(name)').is('delivered_at', null);
+  const { data } = await notCanceled(sb.from('repair_orders').select('*, shops(name)').is('delivered_at', null));
   if(data) checkWarnings(data);
 }
 
@@ -859,6 +882,28 @@ document.addEventListener('click', async e => {
       case 'reload': await loadMe(); startLive(); return go('list');
       case 'logout': stopLive(); await sb.auth.signOut(); S.me = null; return renderLogin();
       case 'bell': return toggleBell();
+      case 'toggleCancel': S.cancelOpen = !S.cancelOpen; return renderDetail(S.id);
+      case 'doCancel': {
+        const r = document.getElementById('cancelReason').value;
+        const note = document.getElementById('cancelNote').value.trim();
+        if(!r) return toast('취소 사유를 선택하세요');
+        if(r === '기타' && !note) return toast('기타 사유는 상세 내용을 적어주세요');
+        const reason = note ? `${r} · ${note}` : r;
+        if(!confirm(`${S.cur.plate} 접수를 취소할까요?\n사유: ${reason}`)) return;
+        busy(true);
+        const { error } = await sb.from('repair_orders').update({ canceled_at: new Date().toISOString(), cancel_reason: reason, canceled_by: S.me.id, updated_at: new Date().toISOString() }).eq('id', S.cur.id);
+        if(error){ busy(false); throw error; }
+        await sb.from('memos').insert({ order_id: S.cur.id, body: `[접수 취소] ${reason}`, created_by: S.me.id, author_name: S.me.name || S.me.email });
+        busy(false); S.cancelOpen = false; toast('접수를 취소했습니다. 기록은 남아 있습니다'); return renderDetail(S.id);
+      }
+      case 'undoCancel': {
+        if(!confirm(`${S.cur.plate} 접수 취소를 되돌릴까요?`)) return;
+        busy(true);
+        const { error } = await sb.from('repair_orders').update({ canceled_at: null, cancel_reason: null, canceled_by: null, updated_at: new Date().toISOString() }).eq('id', S.cur.id);
+        if(error){ busy(false); throw error; }
+        await sb.from('memos').insert({ order_id: S.cur.id, body: '[접수 취소 되돌림]', created_by: S.me.id, author_name: S.me.name || S.me.email });
+        busy(false); toast('되돌렸습니다. 다시 진행 중으로 표시됩니다'); return renderDetail(S.id);
+      }
       case 'copyMsg': { const ok = await copyText(document.getElementById('custMsg').value); return toast(ok ? '복사했습니다. 카톡·문자에 붙여넣으세요' : '복사가 안 됩니다. 문구를 길게 눌러 직접 복사하세요'); }
       case 'alertOpen': { const i = +t.dataset.i; S.alerts.splice(i, 1); drawAlerts(); if(id) return go('detail', id); S.filter = 'check'; return go('list'); }
       case 'alertClose': S.alerts.splice(+t.dataset.i, 1); return drawAlerts();
