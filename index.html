@@ -2,6 +2,10 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
+<script>
+  // 보안 연결(https)이 아니면 바로 https로 이동 (비밀번호가 암호화되지 않은 채 오가지 않게)
+  if (location.protocol === 'http:' && location.hostname !== 'localhost') location.replace('https://' + location.host + location.pathname + location.search + location.hash);
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0B3B8C">
 <meta name="apple-mobile-web-app-capable" content="yes">
