@@ -1120,7 +1120,7 @@ document.addEventListener('pointerdown', stopNag);
 function beep(text){
   if(!bellOn()) return;
   try{ if(navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]); }catch(e){}
-  if(playVoice()){ if(text) setTimeout(() => say(text), 850); return; }
+  if(playVoice()){ if(text) setTimeout(() => say(text), 1000); return; }
   if(text) setTimeout(() => say(text), 650);
   const ctx = audioCtx();
   if(ctx) try{
