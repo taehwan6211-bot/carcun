@@ -15,7 +15,6 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <style>
 :root{
   --brand:#0B3B8C; --brand-d:#082a63; --ink:#111827; --muted:#4B5563; --line:#E5E7EB; --bg:#F3F4F6; --card:#FFFFFF;
@@ -146,7 +145,7 @@ label.f textarea,textarea.in{height:auto;min-height:90px;padding:10px 12px;resiz
 <div id="busy"><span id="busyMsg">처리 중…</span></div>
 <input type="file" id="cam" accept="image/*" capture="environment" hidden>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.min.js"></script>
 <script>
 // ===================== 설정 =====================
 const SUPABASE_URL = 'https://vgbrkddsuchmhzevfgkg.supabase.co';
@@ -308,8 +307,7 @@ async function loadMe(){
     S.me.shop = sh;
     if(!sh || !sh.active) S.me.active = false;
   }
-  if(isHQ()) await loadShops();
-  if(isHQ()) await loadStaff();
+  if(isHQ()) await Promise.all([loadShops(), loadStaff()]);
 }
 const notCanceled = qy => qy.is('canceled_at', null);
 const isLive = o => !o.delivered_at && !o.canceled_at;
