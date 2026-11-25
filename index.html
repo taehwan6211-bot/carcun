@@ -38,9 +38,14 @@ a{color:var(--brand)}
   .bell-txt{display:none}
   .top-in{gap:4px;padding:8px 12px}
   .brand{font-size:16px}
+  .brand-sub{display:none}
   .top .btn.sm{height:34px;padding:0 8px;font-size:13px}
   .nav button{height:34px;padding:0 8px;font-size:14px}
 }
+details.memo-write{margin-top:10px}
+details.memo-write>summary{list-style:none;display:inline-flex;align-items:center;cursor:pointer}
+details.memo-write>summary::-webkit-details-marker{display:none}
+details.memo-write[open]>summary{display:none}
 .todo-sec{margin-bottom:18px}
 .todo-sec h3{margin:0 0 8px;font-size:16px;display:flex;align-items:center;gap:8px}
 .todo-sec h3 .cnt{background:var(--bg);border-radius:999px;padding:1px 10px;font-size:14px}
@@ -321,10 +326,10 @@ function renderTop(){
       ${isAdmin() ? `<button data-act="nav" data-view="admin" class="${S.view==='admin'?'on':''}">관리</button>` : ''}
     </nav>` : '';
   const where = S.me.role === 'shop' && S.me.shop ? S.me.shop.name : (S.me.role === 'admin' ? '대표' : S.me.role === 'staff' ? '본사' : '');
-  $top.innerHTML = `<div class="top-in"><span class="brand">카컨 수리관리</span>${nav}
+  $top.innerHTML = `<div class="top-in"><span class="brand">카컨<span class="brand-sub"> 수리관리</span></span>${nav}
     <span class="who">${esc(where)} · ${esc(S.me.name || S.me.email)}</span>
     <button class="btn sm ${bellOn() ? 'bell-on' : ''}" data-act="bell" title="알림음 켜기/끄기">${bellOn() ? '🔔' : '🔕'}<span class="bell-txt"> 알림 ${bellOn() ? '켜짐' : '켜기'}</span></button>
-    <button class="btn sm" data-act="logout">로그아웃</button></div>`;
+    <button class="btn sm" data-act="logout" title="로그아웃">로그아웃</button></div>`;
 }
 function render(){
   if(!S.me) return renderLogin();
@@ -702,7 +707,7 @@ async function renderDetail(id){
     ${o.stage === LAST && o.delivered_at ? '<div class="note" style="text-align:center">딜리버리까지 완료된 차량입니다</div>' : ''}
   </div></div>` : ''}`;
   let restoredMemo = false;
-  Object.entries(keepMemo).forEach(([k, v]) => { const m = document.getElementById(k); if(m){ m.value = v; restoredMemo = true; } });
+  Object.entries(keepMemo).forEach(([k, v]) => { const m = document.getElementById(k); if(m){ m.value = v; restoredMemo = true; const d = m.closest('details'); if(d) d.open = true; } });
   // 다시 그리면 남는 입력은 메모뿐이므로 그것만 기준으로 표시
   S.dirty = restoredMemo;
 }
@@ -716,15 +721,16 @@ function memoCards(o, memos, hq){
     <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo" data-v="shared">메모 저장</button></div>
     ${memos.map(item).join('') || '<div class="sub">메모가 없습니다</div>'}</div>`;
   const inner = memos.filter(m => m.visibility !== 'shared'), shared = memos.filter(m => m.visibility === 'shared');
+  const write = (label, body) => `<details class="memo-write"><summary class="btn sm">✏️ ${label}</summary><div style="margin-top:8px">${body}</div></details>`;
   return `<div class="card"><h2>본사 내부 메모 <span class="badge b-done">공업사에 안 보임</span></h2>
-    ${ta('memoInternal', '예: 고객 통화, 민원, 비용 협의')}
-    <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo" data-v="internal">내부 메모 저장</button></div>
-    ${inner.map(item).join('') || '<div class="sub">메모가 없습니다</div>'}</div>
+    ${inner.map(item).join('') || '<div class="sub">메모가 없습니다</div>'}
+    ${write('내부 메모 쓰기', `${ta('memoInternal', '예: 고객 통화, 민원, 비용 협의')}
+      <div style="margin:8px 0 4px"><button class="btn sm pri" data-act="addMemo" data-v="internal">내부 메모 저장</button></div>`)}</div>
   <div class="card" style="border:2px solid #FDBA74"><h2>공업사 공유 메모 <span class="badge b-warn">공업사도 봄</span></h2>
-    <p class="sub" style="font-size:13px;margin:0 0 8px">공업사에 전달할 내용만 쓰세요. 고객 연락처·개인 사정은 위 내부 메모에.</p>
-    ${ta('memoShared', '예: 도장 전 사진 요청, 출고 14시 예정')}
-    <div style="margin:8px 0 4px"><button class="btn sm orange" data-act="addMemo" data-v="shared">공업사에 공유</button></div>
-    ${shared.map(item).join('') || '<div class="sub">공유한 메모가 없습니다</div>'}</div>`;
+    ${shared.map(item).join('') || '<div class="sub">공유한 메모가 없습니다</div>'}
+    ${write('공업사에 메모 보내기', `<p class="sub" style="font-size:13px;margin:0 0 8px">공업사에 전달할 내용만 쓰세요. 고객 연락처·개인 사정은 위 내부 메모에.</p>
+      ${ta('memoShared', '예: 도장 전 사진 요청, 출고 14시 예정')}
+      <div style="margin:8px 0 4px"><button class="btn sm orange" data-act="addMemo" data-v="shared">공업사에 공유</button></div>`)}</div>`;
 }
 function stepper(stage){
   return `<div class="steps">${STAGES.map((n,i) =>
@@ -813,15 +819,18 @@ function orderForm(o, c, isEdit, crm){
     </div>
     <label class="chk"><input type="checkbox" name="same" ${sameAddr ? 'checked' : ''}> 딜리버리 주소가 픽업 주소와 같음</label>
     <label class="f">딜리버리 주소 (다를 때만)<input name="delivery_address" value="${esc(sameAddr ? '' : c.delivery_address)}"></label>
-    <h2 style="margin-top:16px">차량 · 보험</h2>
+    <h2 style="margin-top:16px">차량</h2>
     <div class="grid2">
       <label class="f">차량번호 *<input name="plate" value="${esc(o.plate)}" required></label>
       <label class="f">차종<input name="car_model" value="${esc(o.car_model)}"></label>
+    </div>
+    <details class="more" id="insMore" ${o.insurer || o.claim_no || o.accident_type ? 'open' : ''}><summary>보험 정보 (보험사 · 사고 유형 · 접수번호)</summary>
+    <div class="grid2" style="margin-top:8px">
       <label class="f">보험사<input name="insurer" list="insurers" value="${esc(o.insurer)}"></label>
       <label class="f">사고 유형<select name="accident_type"><option value="">선택</option>${opt(accType(o.accident_type) && !ACCIDENT_TYPES.includes(accType(o.accident_type)) ? [...ACCIDENT_TYPES, o.accident_type] : ACCIDENT_TYPES, accType(o.accident_type))}</select></label>
       <label class="f">보험 접수번호<input name="claim_no" value="${esc(o.claim_no)}"></label>
       <label class="f">접수 상태<select name="claim_status">${opt(['미접수','접수완료'], o.claim_status || '미접수')}</select></label>
-    </div>
+    </div></details>
     <datalist id="insurers">${INSURERS.map(x => `<option value="${x}">`).join('')}</datalist>
     <h2 style="margin-top:16px">일정 · 배정</h2>
     <div class="grid2">
@@ -1355,6 +1364,7 @@ document.addEventListener('click', async e => {
         let n = 0;
         Object.entries(p).forEach(([k, v]) => { if(v && f.elements[k]){ f.elements[k].value = v; n++; } });
         if(p.delivery_address) f.elements.same.checked = false;
+        if(p.insurer || p.claim_no || p.accident_type) document.getElementById('insMore').open = true;
         return toast(n ? `${n}개 항목을 채웠습니다. 확인 후 저장하세요` : '읽을 수 있는 항목이 없습니다');
       }
       case 'saveNew': {
