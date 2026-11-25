@@ -1087,8 +1087,41 @@ function audioCtx(){
   }catch(e){}
   return LIVE.ctx;
 }
-function beep(){
+// "카컨!" 알림 소리(carcun.mp3) + 알림 내용 읽어주기
+let VOICE = null;
+async function loadVoice(){
+  const ctx = audioCtx();
+  if(!ctx || VOICE) return VOICE;
+  try{ const r = await fetch('carcun.mp3'); VOICE = await ctx.decodeAudioData(await r.arrayBuffer()); }catch(e){}
+  return VOICE;
+}
+function playVoice(){
+  const ctx = audioCtx();
+  if(!ctx || !VOICE) return false;
+  try{ const src = ctx.createBufferSource(); src.buffer = VOICE; src.connect(ctx.destination); src.start(); return true; }catch(e){ return false; }
+}
+function say(text){
+  try{
+    if(!text || !('speechSynthesis' in window)) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text); u.lang = 'ko-KR'; u.rate = 1.05; u.volume = 1;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+// 공업사 중요 알림은 화면을 만질 때까지 10초마다 다시(최대 1분)
+function nag(text){
+  stopNag();
+  if(!S.me || S.me.role !== 'shop') return;
+  let n = 0;
+  LIVE.nag = setInterval(() => { if(++n > 5) return stopNag(); beep(text); }, 10000);
+}
+function stopNag(){ if(LIVE.nag){ clearInterval(LIVE.nag); LIVE.nag = null; } }
+document.addEventListener('pointerdown', stopNag);
+function beep(text){
   if(!bellOn()) return;
+  try{ if(navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]); }catch(e){}
+  if(playVoice()){ if(text) setTimeout(() => say(text), 850); return; }
+  if(text) setTimeout(() => say(text), 650);
   const ctx = audioCtx();
   if(ctx) try{
     [880, 1175, 880].forEach((f, i) => {
@@ -1098,14 +1131,13 @@ function beep(){
       o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0 + 0.17);
     });
   }catch(e){}
-  try{ if(navigator.vibrate) navigator.vibrate([200, 100, 200]); }catch(e){}
 }
 // loud: 소리·진동 + (다른 탭을 보고 있으면) PC 알림창, quiet: 알림판에만 표시
 function notify(title, body, orderId, loud){
   S.alerts = [{ title, body, id: orderId || '', at: new Date(), loud }, ...(S.alerts || [])].slice(0, 5);
   drawAlerts();
   if(!loud) return;
-  beep(); toast(`${title} · ${body}`);
+  beep(title); nag(title); toast(`${title} · ${body}`);
   if(bellOn() && 'Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible'){
     try{
       const n = new Notification('카컨 · ' + title, { body, tag: 'carcun-' + (orderId || title) });
@@ -1157,10 +1189,11 @@ async function pushOff(){
 function pushResync(){ if(bellOn() && pushOk() && Notification.permission === 'granted') pushOn(false).catch(() => {}); }
 async function toggleBell(){
   if(bellOn()){ lsSet('carcun_bell', '0'); renderTop(); await pushOff(); return toast('알림을 껐습니다. 앱 안의 알림판 표시는 계속됩니다'); }
-  lsSet('carcun_bell', '1'); audioCtx(); renderTop();
+  lsSet('carcun_bell', '1'); audioCtx(); say(' '); renderTop();
+  const voiceReady = loadVoice();
   let res = 'no';
   try{ res = await pushOn(true); }catch(e){ res = 'fail'; }
-  beep();
+  await voiceReady; beep('카컨 알림이 켜졌습니다');
   if(res === 'ok') return toast('알림을 켰습니다. 앱이 꺼져 있어도 휴대폰 알림이 옵니다');
   if(res === 'ios-home') return toast('알림음을 켰습니다. 아이폰은 홈 화면에 추가한 카컨 앱에서 켜야 앱이 꺼져 있어도 알림이 옵니다', 7000);
   if(res === 'denied') return toast('알림이 차단되어 있습니다. 휴대폰 설정 → 알림에서 카컨(또는 크롬)을 허용해 주세요', 7000);
@@ -1490,7 +1523,7 @@ window.addEventListener('beforeunload', e => { if(S.dirty){ e.preventDefault(); 
 // 화면으로 돌아오면(휴대폰 잠금 해제 등) 놓친 변경을 바로 확인
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && S.me){ resyncLive(); liveRefresh(null); } });
 // 첫 터치 때 알림음 준비(브라우저는 사용자가 한 번 눌러야 소리를 허용함)
-document.addEventListener('pointerdown', () => { if(bellOn()) audioCtx(); }, { once: true });
+document.addEventListener('pointerdown', () => { if(bellOn()){ audioCtx(); loadVoice(); } }, { once: true });
 
 // 승인 대기 화면: 20초마다 권한이 지정됐는지 자동 확인
 setInterval(async () => {
