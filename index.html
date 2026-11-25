@@ -1085,19 +1085,7 @@ function audioCtx(){
   }catch(e){}
   return LIVE.ctx;
 }
-// "카컨!" 알림 소리(carcun.mp3) + 알림 내용 읽어주기
-let VOICE = null;
-async function loadVoice(){
-  const ctx = audioCtx();
-  if(!ctx || VOICE) return VOICE;
-  try{ const r = await fetch('carcun.mp3'); VOICE = await ctx.decodeAudioData(await r.arrayBuffer()); }catch(e){}
-  return VOICE;
-}
-function playVoice(){
-  const ctx = audioCtx();
-  if(!ctx || !VOICE) return false;
-  try{ const src = ctx.createBufferSource(); src.buffer = VOICE; src.connect(ctx.destination); src.start(); return true; }catch(e){ return false; }
-}
+// 알림: 맑은 종소리 "띵딩" + 휴대폰 음성으로 "카컨!"과 알림 내용 읽어주기
 function say(text){
   try{
     if(!text || !('speechSynthesis' in window)) return;
@@ -1115,20 +1103,23 @@ function nag(text){
 }
 function stopNag(){ if(LIVE.nag){ clearInterval(LIVE.nag); LIVE.nag = null; } }
 document.addEventListener('pointerdown', stopNag);
+function chime(){
+  const ctx = audioCtx();
+  if(!ctx) return;
+  try{
+    [[1318.5, 0, 0.22], [1760, 0.11, 0.38]].forEach(([f, at, len]) => {
+      const o = ctx.createOscillator(), g = ctx.createGain(), t0 = ctx.currentTime + at;
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + len);
+      o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0 + len + 0.02);
+    });
+  }catch(e){}
+}
 function beep(text){
   if(!bellOn()) return;
   try{ if(navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]); }catch(e){}
-  if(playVoice()){ if(text) setTimeout(() => say(text), 1000); return; }
-  if(text) setTimeout(() => say(text), 650);
-  const ctx = audioCtx();
-  if(ctx) try{
-    [880, 1175, 880].forEach((f, i) => {
-      const o = ctx.createOscillator(), g = ctx.createGain(), t0 = ctx.currentTime + i * 0.18;
-      o.type = 'sine'; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.16);
-      o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0 + 0.17);
-    });
-  }catch(e){}
+  chime();
+  setTimeout(() => say('카컨! ' + (text || '')), 450);
 }
 // loud: 소리·진동 + (다른 탭을 보고 있으면) PC 알림창, quiet: 알림판에만 표시
 function notify(title, body, orderId, loud){
@@ -1188,10 +1179,9 @@ function pushResync(){ if(bellOn() && pushOk() && Notification.permission === 'g
 async function toggleBell(){
   if(bellOn()){ lsSet('carcun_bell', '0'); renderTop(); await pushOff(); return toast('알림을 껐습니다. 앱 안의 알림판 표시는 계속됩니다'); }
   lsSet('carcun_bell', '1'); audioCtx(); say(' '); renderTop();
-  const voiceReady = loadVoice();
   let res = 'no';
   try{ res = await pushOn(true); }catch(e){ res = 'fail'; }
-  await voiceReady; beep('카컨 알림이 켜졌습니다');
+  beep('알림이 켜졌습니다');
   if(res === 'ok') return toast('알림을 켰습니다. 앱이 꺼져 있어도 휴대폰 알림이 옵니다');
   if(res === 'ios-home') return toast('알림음을 켰습니다. 아이폰은 홈 화면에 추가한 카컨 앱에서 켜야 앱이 꺼져 있어도 알림이 옵니다', 7000);
   if(res === 'denied') return toast('알림이 차단되어 있습니다. 휴대폰 설정 → 알림에서 카컨(또는 크롬)을 허용해 주세요', 7000);
@@ -1521,7 +1511,7 @@ window.addEventListener('beforeunload', e => { if(S.dirty){ e.preventDefault(); 
 // 화면으로 돌아오면(휴대폰 잠금 해제 등) 놓친 변경을 바로 확인
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && S.me){ resyncLive(); liveRefresh(null); } });
 // 첫 터치 때 알림음 준비(브라우저는 사용자가 한 번 눌러야 소리를 허용함)
-document.addEventListener('pointerdown', () => { if(bellOn()){ audioCtx(); loadVoice(); } }, { once: true });
+document.addEventListener('pointerdown', () => { if(bellOn()){ audioCtx(); say(' '); } }, { once: true });
 
 // 승인 대기 화면: 20초마다 권한이 지정됐는지 자동 확인
 setInterval(async () => {
