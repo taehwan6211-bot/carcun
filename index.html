@@ -2,6 +2,9 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
+<!-- 보안: 앱이 불러오거나 접속할 수 있는 곳을 카컨 DB와 정해진 프로그램 주소로만 제한 (해킹 코드가 들어와도 정보를 밖으로 못 보내게) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://vgbrkddsuchmhzevfgkg.supabase.co; connect-src 'self' https://vgbrkddsuchmhzevfgkg.supabase.co wss://vgbrkddsuchmhzevfgkg.supabase.co; media-src 'self' data: blob:; font-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <script>
   // 보안 연결(https)이 아니면 바로 https로 이동 (비밀번호가 암호화되지 않은 채 오가지 않게)
   if (location.protocol === 'http:' && location.hostname !== 'localhost') location.replace('https://' + location.host + location.pathname + location.search + location.hash);
@@ -145,7 +148,8 @@ label.f textarea,textarea.in{height:auto;min-height:90px;padding:10px 12px;resiz
 <div id="busy"><span id="busyMsg">처리 중…</span></div>
 <input type="file" id="cam" accept="image/*" capture="environment" hidden>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.min.js"></script>
+<!-- 보안: 프로그램 지문(integrity) 확인. 한 글자라도 바뀌면 실행되지 않음 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.min.js" integrity="sha384-7i/4BYWz4Mn+lJfg2HWfEPfZQ7tmFKF3CTSKlXBpxWjNlLjcg+T6smpHG4gLmU1u" crossorigin="anonymous"></script>
 <script>
 // ===================== 설정 =====================
 const SUPABASE_URL = 'https://vgbrkddsuchmhzevfgkg.supabase.co';
